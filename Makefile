@@ -22,11 +22,15 @@ $(OUT)/%.o : $(SRC)/%.cpp
 # Rule for building shader spirv
 shaders/spirv/%.comp.spirv : shaders/%.comp
 	glslc $^ -o $@
+shaders/spirv/%.frag.spirv : shaders/%.frag
+	glslc $^ -o $@
+shaders/spirv/%.vert.spirv : shaders/%.vert
+	glslc $^ -o $@
 
 _OBJ = main.o
 OBJ = $(patsubst %,$(OUT)/%,$(_OBJ))
 
-_SHADERS = nes.comp
+_SHADERS = nes.comp draw.frag draw.vert
 SHADERS = $(patsubst %,shaders/spirv/%.spirv,$(_SHADERS))
 
 ppu: $(OBJ) | $(SHADERS)
