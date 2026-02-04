@@ -1,0 +1,33 @@
+#version 450
+
+struct Tile {
+    uint data[4];
+} tile;
+
+struct TileSet {
+    Tile tiles[256];
+} tileSet;
+
+struct NameTable {
+    uint tileIndices[240];
+    uint attributeTable[16];
+} nameTable;
+
+layout(binding = 0) uniform readonly PPUMemory {
+    TileSet tileSets[2];
+    NameTable nameTables[4];
+    uint backgroundPalettes[4];
+    uint spritePalettes[4];
+} memory;
+
+layout(binding = 1) uniform readonly SpriteRam {
+    uint sprites[64];
+} spriteRam;
+
+layout(binding = 2) uniform writeonly image2D frame;
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    
+}

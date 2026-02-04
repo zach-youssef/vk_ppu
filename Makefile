@@ -19,14 +19,22 @@ SRC = src
 $(OUT)/%.o : $(SRC)/%.cpp
 	$(CC) -c -o $@ $< $(CFLAGS) $(CLI_FLAGS)
 
+# Rule for building shader spirv
+shaders/spirv/%.comp.spirv : shaders/%.comp
+	glslc $^ -o $@
+
 _OBJ = main.o
 OBJ = $(patsubst %,$(OUT)/%,$(_OBJ))
 
-ppu: $(OBJ)
+_SHADERS = nes.comp
+SHADERS = $(patsubst %,shaders/spirv/%.spirv,$(_SHADERS))
+
+ppu: $(OBJ) | $(SHADERS)
 	$(CC) $^ -o $@ $(LDFLAGS) $(LDLIBS)
 	install_name_tool -add_rpath /usr/local/lib ./$@
 
-.PHONY: clean
+.PHONY: clean 
 
 clean:
-	rm -f build/*.o
+	rm -f build/*.o shaders/spirv/*.spirv
+	rm -f ppu
