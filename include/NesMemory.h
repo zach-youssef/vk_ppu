@@ -30,11 +30,19 @@ namespace nes {
     };
 
     struct PPUMemory {
+        // 0x0000 - 0x1FFF
         TileSet tileSets[2];
+        // 0x2000 - 0x2FFF
         NameTable nameTables[4];
+        // 0x3000 - 0x3EFF
+        uint8_t padding0[3840];
+        // 0x3F00 - 0x3F1F
         Palette backgroundPalettes[4];
         Palette spritePalettes[4];
+        // 0x3f20 - 0x3FFF
+        uint8_t padding1[224];
     };
+    static_assert(sizeof(PPUMemory) == 0x4000);
 
     // Each sprite is 4 bytes
     struct Sprite {

@@ -16,8 +16,10 @@ struct NameTable {
 layout(binding = 0) uniform readonly PPUMemory {
     TileSet tileSets[2];
     NameTable nameTables[4];
+    uint padding0[960];
     uint backgroundPalettes[4];
     uint spritePalettes[4];
+    uint padding1[56];
 } memory;
 
 layout(binding = 1, rgba8) uniform writeonly image2D frame;

@@ -2,3 +2,4 @@
 build/
 shaders/spirv/
 ppu
+*.bin
