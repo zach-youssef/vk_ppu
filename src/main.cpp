@@ -17,6 +17,8 @@
 
 static const uint F = 1u;
 
+static const std::string pathPrefix = "/Users/zyoussef/code/ppu/";
+
 class CompMat : public ComputeMaterial<F> {
 public:
     glm::vec3 getDispatchDimensions() override {
@@ -37,7 +39,7 @@ int main(int argc, char** argv) {
     app.init();
 
     // attemting to read the PPU memory dump....
-    std::ifstream dumpFile(std::string("ppu_dump.bin"), std::ios::binary);
+    std::ifstream dumpFile(pathPrefix + std::string("ppu_dump.bin"), std::ios::binary);
     std::vector<uint8_t> buffer(std::istreambuf_iterator<char>(dumpFile), {});
     nes::PPUMemory ppuMemory;
     std::memcpy(&ppuMemory, buffer.data(), 0x4000);
@@ -116,7 +118,7 @@ int main(int argc, char** argv) {
                 app.getDevice(),
                 app.getPhysicalDevice(),
                 computeDesc,
-                readFile("shaders/spirv/nes.comp.spirv")),
+                readFile(pathPrefix + "shaders/spirv/nes.comp.spirv")),
             app.getDevice(),
             app.getComputeQueue(),
             app.getComputeCommandBuffers()));
@@ -130,8 +132,8 @@ int main(int argc, char** argv) {
                     graphicsDesc,
                     app.getSwapchainExtent(),
                     app.getRenderPass(),
-                    readFile("shaders/spirv/draw.vert.spirv"),
-                    readFile("shaders/spirv/draw.frag.spirv"),
+                    readFile(pathPrefix + "shaders/spirv/draw.vert.spirv"),
+                    readFile(pathPrefix + "shaders/spirv/draw.frag.spirv"),
                     SimpleVertex::getBindingDescription(),
                     SimpleVertex::getAttributeDescriptions()),
                 app.getDevice(),

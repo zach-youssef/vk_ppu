@@ -13,7 +13,7 @@ struct NameTable {
     uint attributeTable[16];
 } nameTable;
 
-layout(binding = 0) uniform readonly PPUMemory {
+layout(std140, binding = 0) uniform readonly PPUMemory {
     TileSet tileSets[2];
     NameTable nameTables[4];
     uint padding0[960];
@@ -114,7 +114,9 @@ void main() {
     uint y = uint(gl_GlobalInvocationID.y);
 
     // Fetch background tile
-    uint tileLocation = uint(x / 32) + uint(y / 30) * 32;
+    uint tileX = uint(x / 8);
+    uint tileY = uint(y / 8);
+    uint tileLocation = tileY * 30 + tileX;
     uint unpackedTileIdx = memory.nameTables[0].tileIndices[tileLocation / 4];
     uint tileIdx = unpackByteFromUint(unpackedTileIdx, tileLocation % 4);
 
