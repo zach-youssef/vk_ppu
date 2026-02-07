@@ -83,10 +83,11 @@ int main(int argc, char** argv) {
 
     // Create texture sampler
     std::unique_ptr<VulkanSampler> sampler;
-    VulkanSampler::createWithAddressMode(sampler,
-                                         VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                                         app.getDevice(),
-                                         app.getPhysicalDevice()); 
+    VulkanSampler::createWithModeAndFilter(sampler,
+                                           VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                                           VK_FILTER_NEAREST,
+                                           app.getDevice(),
+                                           app.getPhysicalDevice()); 
 
     // Compute descriptors
     std::vector<std::shared_ptr<Descriptor>> computeDesc = {
