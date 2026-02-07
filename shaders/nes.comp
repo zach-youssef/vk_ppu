@@ -1,7 +1,10 @@
 #version 450
 
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+
 struct Tile {
-    uint data[4];
+    uint8_t data[16];
 } tile;
 
 struct TileSet {
@@ -9,17 +12,21 @@ struct TileSet {
 } tileSet;
 
 struct NameTable {
-    uint tileIndices[240];
-    uint attributeTable[16];
+    uint8_t tileIndices[960];
+    uint8_t attributeTable[64];
 } nameTable;
 
-layout(std140, binding = 0) uniform readonly PPUMemory {
+struct Palette {
+    uint8_t data[4];
+} palette;
+
+layout(std430, binding = 0) uniform readonly PPUMemory {
     TileSet tileSets[2];
     NameTable nameTables[4];
-    uint padding0[960];
-    uint backgroundPalettes[4];
-    uint spritePalettes[4];
-    uint padding1[56];
+    uint8_t padding0[3840];
+    Palette backgroundPalettes[4];
+    Palette spritePalettes[4];
+    uint8_t padding1[224];
 } memory;
 
 layout(binding = 1, rgba8) uniform writeonly image2D frame;
@@ -95,16 +102,16 @@ layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 uint unpackByteFromUint(uint packed, uint byteIdx) {
     // Data is stored like
-    // 00000000 111111111 22222222 33333333
-    uint shiftDistance = (8 *  (3 - byteIdx));
+    // 33333333 22222222 11111111 00000000
+    uint shiftDistance = (8 *  byteIdx);
     uint mask = 0xFF << shiftDistance;
     return (packed & mask) >> shiftDistance;
 }
 
-uint unpack2BitsFromByte(uint packed, uint byteIdx) {
+uint unpack2BitsFromByte(uint8_t packed, uint byteIdx) {
     // Data is stored line
-    // 00 11 22 33
-    uint shiftDistance = (2 * (3 - byteIdx));
+    // 33 22 11 00
+    uint shiftDistance = (2 * byteIdx);
     uint mask = 0x03 << shiftDistance;
     return (packed & mask) >> shiftDistance;
 }
@@ -116,29 +123,27 @@ void main() {
     // Fetch background tile
     uint tileX = uint(x / 8);
     uint tileY = uint(y / 8);
-    uint tileLocation = tileY * 30 + tileX;
-    uint unpackedTileIdx = memory.nameTables[0].tileIndices[tileLocation / 4];
-    uint tileIdx = unpackByteFromUint(unpackedTileIdx, tileLocation % 4);
+    uint tileLocation = tileY * 32 + tileX;
+    uint tileIdx = memory.nameTables[0].tileIndices[tileLocation];
 
     // Fetch pallette idx from attribute table
     // https://www.nesdev.org/wiki/PPU_attribute_tables
-    uint attributeTableRowIdx = uint(y / 8);
-    uint attributeTableColIdx = uint(x / 8);
-    uint attributeTableHalfRow = memory.nameTables[0].attributeTable[(attributeTableRowIdx * 2) + uint(attributeTableColIdx / 4)];
-    uint attributeByte = unpackByteFromUint(attributeTableHalfRow, attributeTableColIdx % 4);
-    uint indexInAttributeByte = (uint(y / 16) % 2) * 2 + uint((x / 16) * 2);
+    uint attributeTableRowIdx = uint(tileY / 4);
+    uint attributeTableColIdx = uint(tileX / 4);
+    uint attributeLocation = attributeTableRowIdx * 8 + attributeTableColIdx;
+    uint8_t attributeByte = memory.nameTables[0].attributeTable[attributeLocation];
+    uint indexInAttributeByte = (uint(y % 4) / 2) * 2 + uint((x % 4) / 2);
     uint palletteIdx = unpack2BitsFromByte(attributeByte, indexInAttributeByte);
-    uint pallete = memory.backgroundPalettes[palletteIdx];
+    Palette pallete = memory.backgroundPalettes[palletteIdx];
 
     // Fetch pixel value for tile
     Tile tile = memory.tileSets[0].tiles[tileIdx];
     uint xIntoTile = x % 8;
     uint yIntoTile = y % 8;
-    uint tile2RowChunk = tile.data[uint(yIntoTile / 2)];
-    uint tileHalfRowChunk = unpackByteFromUint(tile2RowChunk, uint(yIntoTile % 2) * 2 + uint(xIntoTile / 4));
-    uint indexIntoPalette = unpack2BitsFromByte(tileHalfRowChunk, xIntoTile % 4);
+    uint8_t tileDataChunk = tile.data[uint(yIntoTile / 2) * 4 + uint(xIntoTile / 2)];
+    uint indexIntoPalette = unpack2BitsFromByte(tileDataChunk, (yIntoTile % 2) * 2 + (xIntoTile % 2));
 
     //  Store output color
-    uint color = unpackByteFromUint(pallete, indexIntoPalette);
-    imageStore(frame, ivec2(x, y), vec4(vec3(COLORS[color]) / 255.0, 1.f));
+    uint8_t colorIdx = pallete.data[indexIntoPalette];
+    imageStore(frame, ivec2(x, y), vec4(vec3(COLORS[colorIdx]) / 255.0, 1.f));
 }
