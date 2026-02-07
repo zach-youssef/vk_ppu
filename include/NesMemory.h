@@ -10,7 +10,8 @@
 namespace nes {
     // A tile is an 8x8 grid of 2-bit pixels
     struct Tile {
-        uint8_t data[16];
+        uint8_t plane0[8];
+        uint8_t plane1[8];
     };
 
     // Each tileset has 256 tiles

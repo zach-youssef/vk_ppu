@@ -4,7 +4,8 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 
 struct Tile {
-    uint8_t data[16];
+    uint8_t plane0[8];
+    uint8_t plane1[8];
 } tile;
 
 struct TileSet {
@@ -100,19 +101,19 @@ const uvec3 COLORS[] = {
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
-uint unpackByteFromUint(uint packed, uint byteIdx) {
-    // Data is stored like
-    // 33333333 22222222 11111111 00000000
-    uint shiftDistance = (8 *  byteIdx);
-    uint mask = 0xFF << shiftDistance;
+uint unpack2BitsFromByte(uint8_t packed, uint byteIdx) {
+    // Assumes data is stored like
+    // 33221100
+    uint shiftDistance = (2 * byteIdx);
+    uint mask = 0x03 << shiftDistance;
     return (packed & mask) >> shiftDistance;
 }
 
-uint unpack2BitsFromByte(uint8_t packed, uint byteIdx) {
-    // Data is stored line
-    // 33 22 11 00
-    uint shiftDistance = (2 * byteIdx);
-    uint mask = 0x03 << shiftDistance;
+uint unpackBitFromByte(uint8_t packed, uint byteIdx) {
+    // Assumes data is stored like
+    // 01234567
+    uint shiftDistance = 7 - byteIdx;
+    uint mask = 0x1 << shiftDistance;
     return (packed & mask) >> shiftDistance;
 }
 
@@ -132,21 +133,20 @@ void main() {
     uint attributeTableColIdx = uint(tileX / 4);
     uint attributeLocation = attributeTableRowIdx * 8 + attributeTableColIdx;
     uint8_t attributeByte = memory.nameTables[0].attributeTable[attributeLocation];
-
     uint indexInAttributeByte = (uint(y / 16) % 2) * 2 + uint((x / 16) % 2);
-
     uint palletteIdx = unpack2BitsFromByte(attributeByte, indexInAttributeByte);
     Palette pallete = memory.backgroundPalettes[palletteIdx];
 
     // Fetch pixel value for tile
+    // https://www.nesdev.org/wiki/PPU_pattern_tables
     Tile tile = memory.tileSets[0].tiles[tileIdx];
     uint xIntoTile = x % 8;
     uint yIntoTile = y % 8;
-    uint8_t tileDataChunk = tile.data[uint(yIntoTile / 2) * 4 + uint(xIntoTile / 2)];
-    uint indexIntoPalette = unpack2BitsFromByte(tileDataChunk, (yIntoTile % 2) * 2 + (xIntoTile % 2));
+    uint lowBit = unpackBitFromByte(tile.plane0[yIntoTile], xIntoTile);
+    uint highBit = unpackBitFromByte(tile.plane1[yIntoTile], xIntoTile);
+    uint indexIntoPalette = (highBit << 1) | lowBit;
 
     //  Store output color
-    //uint8_t colorIdx = pallete.data[(y % 2) * 2 + (x % 2)];
     uint8_t colorIdx = pallete.data[indexIntoPalette];
     imageStore(frame, ivec2(x, y), vec4(vec3(COLORS[colorIdx]) / 255.0, 1.f));
 }
