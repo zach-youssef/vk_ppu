@@ -60,8 +60,9 @@ namespace nes {
         TILE_HIGH_BITS = 0x03
     };
 
-    struct SpriteRam {
+    struct OAM {
         Sprite sprites[64];
     };
+    static_assert(sizeof(OAM) == 256);
 
 } // nes

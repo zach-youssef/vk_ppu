@@ -34,25 +34,34 @@ public:
     void update(uint32_t, VkExtent2D) override {}
 };
 
+template<typename T>
+std::unique_ptr<Buffer<T>> createUboFromFile(const std::string& path, VulkanApp<F>& app) {
+    std::ifstream dumpFile(pathPrefix + path, std::ios::binary);
+    std::vector<uint8_t> buffer(std::istreambuf_iterator<char>(dumpFile), {});
+    T memStruct;
+    std::memcpy(&memStruct, buffer.data(), sizeof(T));
+
+    // Upload PPU memory to a uniform buffer
+    std::unique_ptr<Buffer<T>> ubo;
+    Buffer<T>::createAndInitialize(ubo, 
+                                   {memStruct}, 
+                                   VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
+                                   app.getDevice(), 
+                                   app.getPhysicalDevice(), 
+                                   app.getGraphicsQueue(), 
+                                   app.getCommandPool());
+    return ubo;
+}
+
 int main(int argc, char** argv) {
     VulkanApp<F> app(240, 256);
     app.init();
 
-    // attemting to read the PPU memory dump....
-    std::ifstream dumpFile(pathPrefix + std::string("ppu_dump.bin"), std::ios::binary);
-    std::vector<uint8_t> buffer(std::istreambuf_iterator<char>(dumpFile), {});
-    nes::PPUMemory ppuMemory;
-    std::memcpy(&ppuMemory, buffer.data(), 0x4000);
-
-    // Upload PPU memory to a uniform buffer
-    std::unique_ptr<Buffer<nes::PPUMemory>> ppuUbo;
-    Buffer<nes::PPUMemory>::createAndInitialize(ppuUbo, 
-                                               {ppuMemory}, 
-                                               VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
-                                               app.getDevice(), 
-                                               app.getPhysicalDevice(), 
-                                               app.getGraphicsQueue(), 
-                                               app.getCommandPool());
+    // Read PPU dump into a uniform buffer
+    auto ppuUbo = createUboFromFile<nes::PPUMemory>("ppu_dump.bin", app);
+                                            
+    // Read OAM dump into a uniform buffer
+    auto oamUbo = createUboFromFile<nes::OAM>("oam_dump.bin", app);
 
     // Construct M, V, P matrices
     auto model = glm::identity<glm::mat4>();
@@ -93,6 +102,9 @@ int main(int argc, char** argv) {
     std::vector<std::shared_ptr<Descriptor>> computeDesc = {
         std::make_shared<UniformBufferDescriptor<nes::PPUMemory, F>>(
             std::array<VkBuffer, F>{ppuUbo->getBuffer()}, 
+            VK_SHADER_STAGE_COMPUTE_BIT),
+        std::make_shared<UniformBufferDescriptor<nes::OAM, F>>(
+            std::array<VkBuffer, F>{oamUbo->getBuffer()}, 
             VK_SHADER_STAGE_COMPUTE_BIT),
         std::make_shared<StorageImageDescriptor<F>>(
             VK_SHADER_STAGE_COMPUTE_BIT, 

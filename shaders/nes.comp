@@ -30,7 +30,18 @@ layout(std430, binding = 0) uniform readonly PPUMemory {
     uint8_t padding1[224];
 } memory;
 
-layout(binding = 1, rgba8) uniform writeonly image2D frame;
+struct Sprite {
+    uint8_t y;
+    uint8_t tileIndex;
+    uint8_t attr;
+    uint8_t x;
+} sprite;
+
+layout(std430, binding = 1) uniform readonly OAM {
+    Sprite sprites[4];
+} oam;
+
+layout(binding = 2, rgba8) uniform writeonly image2D frame;
 
 const uvec3 COLORS[] = {
     uvec3(124, 124, 124),
@@ -121,25 +132,29 @@ void main() {
     uint x = uint(gl_LocalInvocationID.x);
     uint y = uint(gl_GlobalInvocationID.y);
 
+    // TEST - for SMB3 Home Screen, swap name tables
+    uint nameTableIdx = y < 192 ? 0 : 2;
+    uint patternTableIdx = 0;
+
     // Fetch background tile
     uint tileX = uint(x / 8);
     uint tileY = uint(y / 8);
     uint tileLocation = tileY * 32 + tileX;
-    uint tileIdx = memory.nameTables[0].tileIndices[tileLocation];
+    uint tileIdx = memory.nameTables[nameTableIdx].tileIndices[tileLocation];
 
     // Fetch pallette idx from attribute table
     // https://www.nesdev.org/wiki/PPU_attribute_tables
     uint attributeTableRowIdx = uint(tileY / 4);
     uint attributeTableColIdx = uint(tileX / 4);
     uint attributeLocation = attributeTableRowIdx * 8 + attributeTableColIdx;
-    uint8_t attributeByte = memory.nameTables[0].attributeTable[attributeLocation];
+    uint8_t attributeByte = memory.nameTables[nameTableIdx].attributeTable[attributeLocation];
     uint indexInAttributeByte = (uint(y / 16) % 2) * 2 + uint((x / 16) % 2);
     uint palletteIdx = unpack2BitsFromByte(attributeByte, indexInAttributeByte);
     Palette pallete = memory.backgroundPalettes[palletteIdx];
 
     // Fetch pixel value for tile
     // https://www.nesdev.org/wiki/PPU_pattern_tables
-    Tile tile = memory.tileSets[0].tiles[tileIdx];
+    Tile tile = memory.tileSets[patternTableIdx].tiles[tileIdx];
     uint xIntoTile = x % 8;
     uint yIntoTile = y % 8;
     uint lowBit = unpackBitFromByte(tile.plane0[yIntoTile], xIntoTile);
