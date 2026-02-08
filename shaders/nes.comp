@@ -3,6 +3,8 @@
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 
+// Memory Layout Struct Definitions ----------------------------------
+
 struct Tile {
     uint8_t plane0[8];
     uint8_t plane1[8];
@@ -21,6 +23,17 @@ struct Palette {
     uint8_t data[4];
 } palette;
 
+struct Sprite {
+    uint8_t y;
+    uint8_t tileIndex;
+    uint8_t attr;
+    uint8_t x;
+} sprite;
+
+// -------------------------------------------------------------------
+// Descriptor Layout -------------------------------------------------
+// -------------------------------------------------------------------
+
 layout(std430, binding = 0) uniform readonly PPUMemory {
     TileSet tileSets[2];
     NameTable nameTables[4];
@@ -30,23 +43,22 @@ layout(std430, binding = 0) uniform readonly PPUMemory {
     uint8_t padding1[224];
 } memory;
 
-struct Sprite {
-    uint8_t y;
-    uint8_t tileIndex;
-    uint8_t attr;
-    uint8_t x;
-} sprite;
-
-#define SPR_ATTR_V_FLIP_MASK 1 << 7
-#define SPR_ATTR_H_FLIP_MASK 1 << 6
-#define SPR_ATTR_PRIORITY_MASK 1 << 5
-#define SPR_ATTR_PALETTE_MASK 3
-
 layout(std430, binding = 1) uniform readonly OAM {
     Sprite sprites[64];
 } oam;
 
 layout(binding = 2, rgba8) uniform writeonly image2D frame;
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// -------------------------------------------------------------------
+// Constants ---------------------------------------------------------
+// -------------------------------------------------------------------
+
+#define SPR_ATTR_V_FLIP_MASK 1 << 7
+#define SPR_ATTR_H_FLIP_MASK 1 << 6
+#define SPR_ATTR_PRIORITY_MASK 1 << 5
+#define SPR_ATTR_PALETTE_MASK 3
 
 const uvec3 COLORS[] = {
     uvec3(124, 124, 124),
@@ -115,7 +127,9 @@ const uvec3 COLORS[] = {
     uvec3(0, 0, 0)
 };
 
-layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+// -------------------------------------------------------------------
+// Unpack Helpers ----------------------------------------------------
+// -------------------------------------------------------------------
 
 uint unpack2BitsFromByte(uint8_t packed, uint byteIdx) {
     // Assumes data is stored like
@@ -133,6 +147,18 @@ uint unpackBitFromByte(uint8_t packed, uint byteIdx) {
     return (packed & mask) >> shiftDistance;
 }
 
+uint sampleTile(Tile tile, uint x, uint y) {
+    uint xIntoTile = x % 8;
+    uint yIntoTile = y % 8;
+    uint lowBit = unpackBitFromByte(tile.plane0[yIntoTile], xIntoTile);
+    uint highBit = unpackBitFromByte(tile.plane1[yIntoTile], xIntoTile);
+    return (highBit << 1) | lowBit;
+}
+
+// -------------------------------------------------------------------
+// Sprite Helpers ----------------------------------------------------
+// -------------------------------------------------------------------
+ 
 bool spriteOnScaline(Sprite sprite, uint y) {
     // Assuming 8x16 sprites
     return y >= sprite.y && y < sprite.y + 16;
@@ -142,6 +168,10 @@ bool spriteOnColumn(Sprite sprite, uint x) {
     return x >= sprite.x && x < sprite.x + 8;
 }
 
+// -------------------------------------------------------------------
+// Sprite Evaluation -------------------------------------------------
+// -------------------------------------------------------------------
+ 
 // Group memory for evaluating sprites for the current scanline
 shared Sprite[64] scanlineSprites;
 shared uint[64] workIndices;
@@ -181,13 +211,9 @@ void reduceScanlineSprites(uint x, uint y) {
     REDUCTION_STEP(8)
 }
 
-uint sampleTile(Tile tile, uint x, uint y) {
-    uint xIntoTile = x % 8;
-    uint yIntoTile = y % 8;
-    uint lowBit = unpackBitFromByte(tile.plane0[yIntoTile], xIntoTile);
-    uint highBit = unpackBitFromByte(tile.plane1[yIntoTile], xIntoTile);
-    return (highBit << 1) | lowBit;
-}
+// -------------------------------------------------------------------
+// Sprite Processing Loop --------------------------------------------
+// -------------------------------------------------------------------
 
 #define PROCESS_SPRITE(spriteIdx)                                                       \
     sprite = scanlineSprites[spriteIdx];                                                \
@@ -218,6 +244,9 @@ uint sampleTile(Tile tile, uint x, uint y) {
         ? sprite.attr & SPR_ATTR_PALETTE_MASK                                           \
         : spritePaletteIndex;                                                           \
 
+// -------------------------------------------------------------------
+// Main Shader -------------------------------------------------------
+// -------------------------------------------------------------------
 
 void main() {
     uint x = uint(gl_LocalInvocationID.x);
