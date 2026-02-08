@@ -37,8 +37,13 @@ struct Sprite {
     uint8_t x;
 } sprite;
 
+#define SPR_ATTR_V_FLIP_MASK 1 << 7
+#define SPR_ATTR_H_FLIP_MASK 1 << 6
+#define SPR_ATTR_PRIORITY_MASK 1 << 5
+#define SPR_ATTR_PALETTE_MASK 3
+
 layout(std430, binding = 1) uniform readonly OAM {
-    Sprite sprites[4];
+    Sprite sprites[64];
 } oam;
 
 layout(binding = 2, rgba8) uniform writeonly image2D frame;
@@ -128,9 +133,53 @@ uint unpackBitFromByte(uint8_t packed, uint byteIdx) {
     return (packed & mask) >> shiftDistance;
 }
 
+shared Sprite[64] scanlineSprites;
+
+bool spriteOnScaline(Sprite sprite, uint y) {
+    // Assuming 8x8 sprites
+    return (y + 1) >= sprite.y && (y + 1) <= sprite.y + 8;
+}
+
+bool spriteOnColumn(Sprite sprite, uint x) {
+    return x >= sprite.x && x <= sprite.x + 8;
+}
+
+#define REDUCTION_STEP(stride)                                  \
+    if (x < stride) {                                           \
+        Sprite s1 = scanlineSprites[x];                         \
+        Sprite s2 = scanlineSprites[x + stride];                \
+        scanlineSprites[x] = spriteOnScaline(s1, y) ? s1 : s2;  \
+    }                                                           \
+    groupMemoryBarrier();                                       \
+
+
+void reduceScanlineSprites(uint x, uint y) {
+    // Initialize reduction
+    if (x < 64) {
+        scanlineSprites[x] = oam.sprites[x];
+    }
+    groupMemoryBarrier();
+
+    // Perform reduction
+    REDUCTION_STEP(32)
+    REDUCTION_STEP(16)
+    REDUCTION_STEP(8)
+}
+
+uint sampleTile(Tile tile, uint x, uint y) {
+    uint xIntoTile = x % 8;
+    uint yIntoTile = y % 8;
+    uint lowBit = unpackBitFromByte(tile.plane0[yIntoTile], xIntoTile);
+    uint highBit = unpackBitFromByte(tile.plane1[yIntoTile], xIntoTile);
+    return (highBit << 1) | lowBit;
+}
+
 void main() {
     uint x = uint(gl_LocalInvocationID.x);
     uint y = uint(gl_GlobalInvocationID.y);
+
+    // Reduce OAM to find the max 8 sprites relevant to this frame
+    reduceScanlineSprites(x, y);
 
     // TEST - for SMB3 Home Screen, swap name tables
     uint nameTableIdx = y < 192 ? 0 : 2;
@@ -155,11 +204,38 @@ void main() {
     // Fetch pixel value for tile
     // https://www.nesdev.org/wiki/PPU_pattern_tables
     Tile tile = memory.tileSets[patternTableIdx].tiles[tileIdx];
-    uint xIntoTile = x % 8;
-    uint yIntoTile = y % 8;
-    uint lowBit = unpackBitFromByte(tile.plane0[yIntoTile], xIntoTile);
-    uint highBit = unpackBitFromByte(tile.plane1[yIntoTile], xIntoTile);
-    uint indexIntoPalette = (highBit << 1) | lowBit;
+    uint indexIntoPalette = sampleTile(tile, x ,y);
+
+    // Evaluate sprites (assuming 8x8)
+    // Loop through indices backwards for correct overlap
+    // TODO: confirm glslc is unrolling this loop
+    bool spritePriority = false;
+    uint spriteIndexIntoPalette = 0;
+    uint spritePaletteIndex = 0;
+    for (int spriteIdx = 7; spriteIdx >= 0; --spriteIdx) {
+        Sprite sprite = scanlineSprites[spriteIdx];
+        Tile spriteTile = memory.tileSets[0]
+                                .tiles[sprite.tileIndex];
+        // TODO implement vertical & horizontal bits
+        uint tileValue = sampleTile(spriteTile, x - sprite.x, y - sprite.y);
+        // Clear out value if this sprite is out of range
+        tileValue *= spriteOnScaline(sprite, y)? 1 : 0;
+        tileValue *= spriteOnColumn(sprite, x)? 1 : 0;
+
+        // We choose this sprite if it has a nonzero value
+        spriteIndexIntoPalette = tileValue > 0? tileValue : spriteIndexIntoPalette;
+        spritePriority = tileValue > 0
+            ? (sprite.attr & SPR_ATTR_PRIORITY_MASK) == 1
+            : spritePriority;
+        spritePaletteIndex = tileValue > 0
+            ? unpack2BitsFromByte(sprite.attr, 0) 
+            : spritePaletteIndex;
+    }
+
+    // Render background or sprite based on priority
+    bool drawSprite = indexIntoPalette == 0 || spritePriority;
+    pallete = drawSprite? memory.spritePalettes[spritePaletteIndex] : pallete;
+    indexIntoPalette = drawSprite ? spriteIndexIntoPalette : indexIntoPalette;
 
     //  Store output color
     uint8_t colorIdx = pallete.data[indexIntoPalette];
