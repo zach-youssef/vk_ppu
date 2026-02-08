@@ -189,6 +189,36 @@ uint sampleTile(Tile tile, uint x, uint y) {
     return (highBit << 1) | lowBit;
 }
 
+#define PROCESS_SPRITE(spriteIdx)                                                       \
+    sprite = scanlineSprites[spriteIdx];                                                \
+    /* Grab the tile for the sprite */                                                  \
+    yFlip = (sprite.attr & SPR_ATTR_V_FLIP_MASK) >> 7;                                  \
+    spriteTile = memory.tileSets[sprite.tileIndex & 0x1]                                \
+                            .tiles[(sprite.tileIndex & 0xFE)                            \
+                                    + ((y - sprite.y > 7)                               \
+                                        ? 1 - yFlip                                     \
+                                        : yFlip)];                                      \
+    /* Sample the tile */                                                               \
+    xIntoTile = x - sprite.x;                                                           \
+    xIntoTile = ((sprite.attr & SPR_ATTR_H_FLIP_MASK) != 0)? 7 - xIntoTile : xIntoTile; \
+    yIntoTile = y - sprite.y;                                                           \
+    yIntoTile = ((sprite.attr & SPR_ATTR_V_FLIP_MASK) != 0)? 7 - yIntoTile : yIntoTile; \
+    tileValue = sampleTile(spriteTile, xIntoTile, yIntoTile);                           \
+                                                                                        \
+    /* Clear out value if this sprite is out of range */                                \
+    tileValue *= spriteOnScaline(sprite, y)? 1 : 0;                                     \
+    tileValue *= spriteOnColumn(sprite, x)? 1 : 0;                                      \
+                                                                                        \
+    /* We choose this sprite if it has a nonzero value */                               \
+    spriteIndexIntoPalette = tileValue > 0? tileValue : spriteIndexIntoPalette;         \
+    spritePriority = tileValue > 0                                                      \
+        ? (sprite.attr & SPR_ATTR_PRIORITY_MASK) == 0                                   \
+        : spritePriority;                                                               \
+    spritePaletteIndex = tileValue > 0                                                  \
+        ? sprite.attr & SPR_ATTR_PALETTE_MASK                                           \
+        : spritePaletteIndex;                                                           \
+
+
 void main() {
     uint x = uint(gl_LocalInvocationID.x);
     uint y = uint(gl_GlobalInvocationID.y);
@@ -223,40 +253,22 @@ void main() {
     uint indexIntoPalette = sampleTile(tile, x ,y);
 
     // Evaluate sprites (assuming 8x16)
-    // Loop through indices backwards for correct overlap
     bool spritePriority = false;
     uint spriteIndexIntoPalette = 0;
     uint spritePaletteIndex = 0;
-    // TODO: confirm glslc is unrolling this loop
-    for (int spriteIdx = 7; spriteIdx >= 0; --spriteIdx) {
-        Sprite sprite = scanlineSprites[spriteIdx];
-        // Grab the tile for the sprite
-        uint yFlip = (sprite.attr & SPR_ATTR_V_FLIP_MASK) >> 7;
-        Tile spriteTile = memory.tileSets[sprite.tileIndex & 0x1]
-                                .tiles[(sprite.tileIndex & 0xFE) 
-                                        + ((y - sprite.y > 7) 
-                                            ? 1 - yFlip
-                                            : yFlip)];
-        // Sample the tile
-        uint xIntoTile = x - sprite.x;
-        xIntoTile = ((sprite.attr & SPR_ATTR_H_FLIP_MASK) != 0)? 7 - xIntoTile : xIntoTile;
-        uint yIntoTile = y - sprite.y;
-        yIntoTile = ((sprite.attr & SPR_ATTR_V_FLIP_MASK) != 0)? 7 - yIntoTile : yIntoTile;
-        uint tileValue = sampleTile(spriteTile, xIntoTile, yIntoTile);
-
-        // Clear out value if this sprite is out of range
-        tileValue *= spriteOnScaline(sprite, y)? 1 : 0;
-        tileValue *= spriteOnColumn(sprite, x)? 1 : 0;
-
-        // We choose this sprite if it has a nonzero value
-        spriteIndexIntoPalette = tileValue > 0? tileValue : spriteIndexIntoPalette;
-        spritePriority = tileValue > 0
-            ? (sprite.attr & SPR_ATTR_PRIORITY_MASK) == 0
-            : spritePriority;
-        spritePaletteIndex = tileValue > 0
-            ? sprite.attr & SPR_ATTR_PALETTE_MASK
-            : spritePaletteIndex;
-    }
+    // Declare 'loop' variables used inside unrolled step macro
+    uint yFlip, xIntoTile, yIntoTile, tileValue;
+    Sprite sprite;
+    Tile spriteTile;
+    // Loop through indices backwards for correct overlap
+    PROCESS_SPRITE(7);
+    PROCESS_SPRITE(6);
+    PROCESS_SPRITE(5);
+    PROCESS_SPRITE(4);
+    PROCESS_SPRITE(3);
+    PROCESS_SPRITE(2);
+    PROCESS_SPRITE(1);
+    PROCESS_SPRITE(0);
 
     // Render background or sprite based on priority
     bool drawSprite = indexIntoPalette == 0 || spritePriority;
