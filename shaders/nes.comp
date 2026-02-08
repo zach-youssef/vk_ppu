@@ -133,30 +133,45 @@ uint unpackBitFromByte(uint8_t packed, uint byteIdx) {
     return (packed & mask) >> shiftDistance;
 }
 
-shared Sprite[64] scanlineSprites;
-
 bool spriteOnScaline(Sprite sprite, uint y) {
-    // Assuming 8x8 sprites
-    return (y + 1) >= sprite.y && (y + 1) <= sprite.y + 8;
+    // Assuming 8x16 sprites
+    return y >= sprite.y && y < sprite.y + 16;
 }
 
 bool spriteOnColumn(Sprite sprite, uint x) {
-    return x >= sprite.x && x <= sprite.x + 8;
+    return x >= sprite.x && x < sprite.x + 8;
 }
 
-#define REDUCTION_STEP(stride)                                  \
-    if (x < stride) {                                           \
-        Sprite s1 = scanlineSprites[x];                         \
-        Sprite s2 = scanlineSprites[x + stride];                \
-        scanlineSprites[x] = spriteOnScaline(s1, y) ? s1 : s2;  \
-    }                                                           \
-    groupMemoryBarrier();                                       \
+// Group memory for evaluating sprites for the current scanline
+shared Sprite[64] scanlineSprites;
+shared uint[64] workIndices;
+
+// When comparing two sprites, if both are on the scanline, select
+// based on index
+#define REDUCTION_STEP(stride)                                              \
+    if (x < stride) {                                                       \
+        Sprite s1 = scanlineSprites[x];                                     \
+        Sprite s2 = scanlineSprites[x + stride];                            \
+        bool useIndexCheck = spriteOnScaline(s1, y)                         \
+                             == spriteOnScaline(s2, y);                     \
+        bool select = useIndexCheck                                         \
+            ? workIndices[x] > workIndices[x + stride]                      \
+            : spriteOnScaline(s1, y);                                       \
+        scanlineSprites[x] = select ? s1 : s2;                              \
+        workIndices[x] = select ? workIndices[x] : workIndices[x + stride]; \
+    }                                                                       \
+    groupMemoryBarrier();                                                   \
 
 
 void reduceScanlineSprites(uint x, uint y) {
     // Initialize reduction
     if (x < 64) {
         scanlineSprites[x] = oam.sprites[x];
+        // Sprites in OAM have their y coordinates shifted by 1 as a 
+        // real NES has sprite evaluation delayed by 1 scanline 
+        // (see https://www.nesdev.org/wiki/PPU_OAM#Byte_0_-_Y_position)
+        scanlineSprites[x].y += uint8_t(1);
+        workIndices[x] = x;
     }
     groupMemoryBarrier();
 
@@ -178,10 +193,11 @@ void main() {
     uint x = uint(gl_LocalInvocationID.x);
     uint y = uint(gl_GlobalInvocationID.y);
 
-    // Reduce OAM to find the max 8 sprites relevant to this frame
+    // Reduce OAM to find the up to 8 sprites relevant to this frame
     reduceScanlineSprites(x, y);
 
-    // TEST - for SMB3 Home Screen, swap name tables
+    // TEST - for SMB3 Home Screen, swap name tables after
+    // scanline 192
     uint nameTableIdx = y < 192 ? 0 : 2;
     uint patternTableIdx = 0;
 
@@ -206,18 +222,28 @@ void main() {
     Tile tile = memory.tileSets[patternTableIdx].tiles[tileIdx];
     uint indexIntoPalette = sampleTile(tile, x ,y);
 
-    // Evaluate sprites (assuming 8x8)
+    // Evaluate sprites (assuming 8x16)
     // Loop through indices backwards for correct overlap
-    // TODO: confirm glslc is unrolling this loop
     bool spritePriority = false;
     uint spriteIndexIntoPalette = 0;
     uint spritePaletteIndex = 0;
+    // TODO: confirm glslc is unrolling this loop
     for (int spriteIdx = 7; spriteIdx >= 0; --spriteIdx) {
         Sprite sprite = scanlineSprites[spriteIdx];
-        Tile spriteTile = memory.tileSets[0]
-                                .tiles[sprite.tileIndex];
-        // TODO implement vertical & horizontal bits
-        uint tileValue = sampleTile(spriteTile, x - sprite.x, y - sprite.y);
+        // Grab the tile for the sprite
+        uint yFlip = (sprite.attr & SPR_ATTR_V_FLIP_MASK) >> 7;
+        Tile spriteTile = memory.tileSets[sprite.tileIndex & 0x1]
+                                .tiles[(sprite.tileIndex & 0xFE) 
+                                        + ((y - sprite.y > 7) 
+                                            ? 1 - yFlip
+                                            : yFlip)];
+        // Sample the tile
+        uint xIntoTile = x - sprite.x;
+        xIntoTile = ((sprite.attr & SPR_ATTR_H_FLIP_MASK) != 0)? 7 - xIntoTile : xIntoTile;
+        uint yIntoTile = y - sprite.y;
+        yIntoTile = ((sprite.attr & SPR_ATTR_V_FLIP_MASK) != 0)? 7 - yIntoTile : yIntoTile;
+        uint tileValue = sampleTile(spriteTile, xIntoTile, yIntoTile);
+
         // Clear out value if this sprite is out of range
         tileValue *= spriteOnScaline(sprite, y)? 1 : 0;
         tileValue *= spriteOnColumn(sprite, x)? 1 : 0;
@@ -225,10 +251,10 @@ void main() {
         // We choose this sprite if it has a nonzero value
         spriteIndexIntoPalette = tileValue > 0? tileValue : spriteIndexIntoPalette;
         spritePriority = tileValue > 0
-            ? (sprite.attr & SPR_ATTR_PRIORITY_MASK) == 1
+            ? (sprite.attr & SPR_ATTR_PRIORITY_MASK) == 0
             : spritePriority;
         spritePaletteIndex = tileValue > 0
-            ? unpack2BitsFromByte(sprite.attr, 0) 
+            ? sprite.attr & SPR_ATTR_PALETTE_MASK
             : spritePaletteIndex;
     }
 
