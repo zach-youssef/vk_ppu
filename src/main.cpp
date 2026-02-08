@@ -35,6 +35,19 @@ public:
 };
 
 template<typename T>
+std::unique_ptr<Buffer<T>> createUboFromStruct(T t, VulkanApp<F>& app) {
+    std::unique_ptr<Buffer<T>> ubo;
+    Buffer<T>::createAndInitialize(ubo, 
+                                   {t}, 
+                                   VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
+                                   app.getDevice(), 
+                                   app.getPhysicalDevice(), 
+                                   app.getGraphicsQueue(), 
+                                   app.getCommandPool());
+    return ubo;
+}
+
+template<typename T>
 std::unique_ptr<Buffer<T>> createUboFromFile(const std::string& path, VulkanApp<F>& app) {
     std::ifstream dumpFile(pathPrefix + path, std::ios::binary);
     std::vector<uint8_t> buffer(std::istreambuf_iterator<char>(dumpFile), {});
@@ -42,15 +55,7 @@ std::unique_ptr<Buffer<T>> createUboFromFile(const std::string& path, VulkanApp<
     std::memcpy(&memStruct, buffer.data(), sizeof(T));
 
     // Upload PPU memory to a uniform buffer
-    std::unique_ptr<Buffer<T>> ubo;
-    Buffer<T>::createAndInitialize(ubo, 
-                                   {memStruct}, 
-                                   VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
-                                   app.getDevice(), 
-                                   app.getPhysicalDevice(), 
-                                   app.getGraphicsQueue(), 
-                                   app.getCommandPool());
-    return ubo;
+    return createUboFromStruct<T>(memStruct, app);
 }
 
 int main(int argc, char** argv) {
@@ -63,6 +68,11 @@ int main(int argc, char** argv) {
     // Read OAM dump into a uniform buffer
     auto oamUbo = createUboFromFile<nes::OAM>("oam_dump.bin", app);
 
+    // Create Control ubo
+    // (TEST: settings for current scene)
+    nes::Control ctrl{0, 0, 1, 0, 1, 0, {0,0,0,0,0,0,0,0}};
+    auto ctrlUbo = createUboFromStruct<nes::Control>(ctrl, app);
+
     // Construct M, V, P matrices
     auto model = glm::identity<glm::mat4>();
     auto view = glm::identity<glm::mat4>();
@@ -71,14 +81,9 @@ int main(int argc, char** argv) {
     projection[1][1] *= -1;
 
     // Upload MVP UBO to a uniform buffer
-    std::unique_ptr<Buffer<UniformBufferObject>> mvpUbo;
-    Buffer<UniformBufferObject>::createAndInitialize(mvpUbo, 
-                                                    {UniformBufferObject::fromModelViewProjection(model, view, projection)}, 
-                                                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
-                                                    app.getDevice(), 
-                                                    app.getPhysicalDevice(), 
-                                                    app.getGraphicsQueue(), 
-                                                    app.getCommandPool());
+    std::unique_ptr<Buffer<UniformBufferObject>> mvpUbo = createUboFromStruct<UniformBufferObject>(
+        UniformBufferObject::fromModelViewProjection(model, view, projection), 
+        app);
 
     // Create image to store frame texture
     std::unique_ptr<Image> frameTexture;
@@ -105,6 +110,9 @@ int main(int argc, char** argv) {
             VK_SHADER_STAGE_COMPUTE_BIT),
         std::make_shared<UniformBufferDescriptor<nes::OAM, F>>(
             std::array<VkBuffer, F>{oamUbo->getBuffer()}, 
+            VK_SHADER_STAGE_COMPUTE_BIT),
+        std::make_shared<UniformBufferDescriptor<nes::Control, F>>(
+            std::array<VkBuffer, F>{ctrlUbo->getBuffer()}, 
             VK_SHADER_STAGE_COMPUTE_BIT),
         std::make_shared<StorageImageDescriptor<F>>(
             VK_SHADER_STAGE_COMPUTE_BIT, 

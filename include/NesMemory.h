@@ -65,4 +65,16 @@ namespace nes {
     };
     static_assert(sizeof(OAM) == 256);
 
+    struct Control {
+        uint16_t xScroll;
+        uint16_t yScroll;
+        uint8_t spriteHeight;
+        uint8_t backgroundTileset;
+        uint8_t spriteTileset;
+        uint8_t nametableStart;
+        // Align to 16 bytes for compatibility
+        uint8_t padding[8]; 
+    };
+    static_assert(sizeof(Control) == 16);
+
 } // nes
