@@ -173,8 +173,8 @@ uint sampleTile(Tile tile, uint x, uint y) {
 // -------------------------------------------------------------------
  
 bool spriteOnScaline(Sprite sprite, uint y) {
-    // Assuming 8x16 sprites
-    return y >= sprite.y && y < sprite.y + 16;
+    uint spriteHeight = (control.spriteHeight == 1) ? 16 : 8;
+    return y >= sprite.y && y < sprite.y + spriteHeight;
 }
 
 bool spriteOnColumn(Sprite sprite, uint x) {
@@ -218,7 +218,7 @@ void reduceScanlineSprites(uint x, uint y) {
     }
     groupMemoryBarrier();
 
-    // Perform reduction
+    // Perform reduction until we have the 8 sprites for this scanline
     REDUCTION_STEP(32)
     REDUCTION_STEP(16)
     REDUCTION_STEP(8)
@@ -232,11 +232,10 @@ void reduceScanlineSprites(uint x, uint y) {
     sprite = scanlineSprites[spriteIdx];                                                \
     /* Grab the tile for the sprite */                                                  \
     yFlip = (sprite.attr & SPR_ATTR_V_FLIP_MASK) >> 7;                                  \
-    spriteTile = memory.tileSets[sprite.tileIndex & 0x1]                                \
-                            .tiles[(sprite.tileIndex & 0xFE)                            \
-                                    + ((y - sprite.y > 7)                               \
-                                        ? 1 - yFlip                                     \
-                                        : yFlip)];                                      \
+    spriteTile = memory.tileSets[sprites8x16 ? (sprite.tileIndex & 0x1)                 \
+                                             : control.spriteTileset]                   \
+                        .tiles[(sprite.tileIndex & (sprites8x16? 0xFE : 0xFF))          \
+                                + ((y - sprite.y > 7) ? 1 - yFlip : yFlip)];            \
     /* Sample the tile */                                                               \
     xIntoTile = x - sprite.x;                                                           \
     xIntoTile = ((sprite.attr & SPR_ATTR_H_FLIP_MASK) != 0)? 7 - xIntoTile : xIntoTile; \
@@ -271,7 +270,6 @@ void main() {
     // TEST - for SMB3 Home Screen, swap name tables after
     // scanline 192
     uint nameTableIdx = y < 192 ? 0 : 2;
-    uint patternTableIdx = 0;
 
     // Fetch background tile
     uint tileX = uint(x / 8);
@@ -291,13 +289,14 @@ void main() {
 
     // Fetch pixel value for tile
     // https://www.nesdev.org/wiki/PPU_pattern_tables
-    Tile tile = memory.tileSets[patternTableIdx].tiles[tileIdx];
+    Tile tile = memory.tileSets[control.backgroundTileset].tiles[tileIdx];
     uint indexIntoPalette = sampleTile(tile, x ,y);
 
-    // Evaluate sprites (assuming 8x16)
+    // Evaluate sprites
     bool spritePriority = false;
     uint spriteIndexIntoPalette = 0;
     uint spritePaletteIndex = 0;
+    bool sprites8x16 = control.spriteHeight == 1;
     // Declare 'loop' variables used inside unrolled step macro
     uint yFlip, xIntoTile, yIntoTile, tileValue;
     Sprite sprite;
