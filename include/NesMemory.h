@@ -72,8 +72,9 @@ namespace nes {
         uint8_t backgroundTileset;
         uint8_t spriteTileset;
         uint8_t nametableStart;
+        uint8_t yOffset;
         // Align to 16 bytes for compatibility
-        uint8_t padding[8]; 
+        uint8_t padding[7]; 
     };
     static_assert(sizeof(Control) == 16);
 

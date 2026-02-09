@@ -14,32 +14,24 @@
 
 #include "NesMemory.h"
 #include "ImageToScreenRenderable.h"
-
-static const uint F = 1u;
+#include "PpuComputeNode.h"
 
 static const std::string pathPrefix = "/Users/zyoussef/code/ppu/";
 
-class CompMat : public ComputeMaterial<F> {
-public:
-    glm::vec3 getDispatchDimensions() override {
-        return glm::vec3(1, 240, 1);
-    }
-
-    CompMat(VkDevice device,
-            VkPhysicalDevice physicalDevice,
-            std::vector<std::shared_ptr<Descriptor>> descriptors,
-            const std::vector<char> & computeShaderCode): 
-    ComputeMaterial<F> (device, physicalDevice, descriptors, computeShaderCode) {}
-
-    void update(uint32_t, VkExtent2D) override {}
+struct StagingData {
+    uint8_t bgPalette3Color2;
+    uint8_t startingNametable;
+    uint8_t midframeNametable;
 };
 
 template<typename T>
-std::unique_ptr<Buffer<T>> createUboFromStruct(T t, VulkanApp<F>& app) {
+std::unique_ptr<Buffer<T>> createUboFromStruct(T t, VulkanApp<F>& app, 
+                                              VkMemoryPropertyFlags memFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
     std::unique_ptr<Buffer<T>> ubo;
     Buffer<T>::createAndInitialize(ubo, 
                                    {t}, 
                                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
+                                   memFlags,
                                    app.getDevice(), 
                                    app.getPhysicalDevice(), 
                                    app.getGraphicsQueue(), 
@@ -70,8 +62,8 @@ int main(int argc, char** argv) {
 
     // Create Control ubo
     // (TEST: settings for current scene)
-    nes::Control ctrl{0, 0, 1, 0, 1, 0, {0,0,0,0,0,0,0,0}};
-    auto ctrlUbo = createUboFromStruct<nes::Control>(ctrl, app);
+    nes::Control ctrl{0, 0, 1, 0, 1, 0, 0, {0,0,0,0,0,0,0}};
+    auto ctrlUbo = createUboFromStruct<nes::Control>(ctrl, app, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     // Construct M, V, P matrices
     auto model = glm::identity<glm::mat4>();
@@ -119,6 +111,83 @@ int main(int argc, char** argv) {
             std::array<VkImageView, F>{frameTexture->getImageView()})
     };
 
+    // Mapping to the 'yOffset' control value so the PPU node can control
+    // dispatches of scanline bunches
+    auto yOffsetMapping = ctrlUbo->getPersistentMapping(offsetof(nes::Control, yOffset), sizeof(uint8_t));
+
+    // Create staging buffer for updates to our GPU memory
+    std::unique_ptr<Buffer<StagingData>> stagingBuffer;
+    Buffer<StagingData>::create(stagingBuffer,
+                                1,
+                                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                app.getDevice(),
+                                app.getPhysicalDevice());
+
+    // Create compute node that controls our PPU rendering
+    auto ppuCompute = std::make_unique<PpuComputeNode>(app.getDevice(),
+                                                       app.getPhysicalDevice(),
+                                                       app.getComputeQueue(),
+                                                       app.getComputeCommandBuffers(),
+                                                       computeDesc,
+                                                       readFile(pathPrefix + "shaders/spirv/nes.comp.spirv"),
+                                                       stagingBuffer->getBuffer(),
+                                                       (uint8_t*)yOffsetMapping.get());
+    
+    // Configure pre and mid frame updates to the PPU memory
+    // TEST: SMB3 title screen palette cycle
+    VkBufferCopy bgPalette3Color2;
+    bgPalette3Color2.dstOffset = offsetof(nes::PPUMemory, backgroundPalettes[3])
+                               + offsetof(nes::Palette, data[2]);
+    bgPalette3Color2.srcOffset = offsetof(StagingData, bgPalette3Color2);
+    bgPalette3Color2.size = sizeof(uint8_t);
+    MemoryUpdate paletteCycle {ppuUbo->getBuffer(), {bgPalette3Color2}};
+    ppuCompute->addUpdate(0, paletteCycle);
+    // Initialize the staging buffer with the right starting color
+    stagingBuffer->mapAndExecute(bgPalette3Color2.srcOffset, sizeof(uint8_t), [](void* map){
+        *((uint8_t*) map) = 0x17;
+    });
+
+    // Add pre-draw callback to update a clock
+    auto last = std::chrono::system_clock::now();
+    auto now = std::chrono::system_clock::now();
+    long currentFrame = 0;
+    auto updateClockCallback = std::make_shared<std::function<void(VulkanApp<F>&,uint32_t)>>();
+    *updateClockCallback = [&last, &now, &currentFrame] (VulkanApp<F>&,uint32_t) {
+        now = std::chrono::system_clock::now();
+        auto deltaTime = std::chrono::duration_cast<std::chrono::microseconds>(now - last);
+        if (deltaTime.count() >= 16666) {
+            currentFrame += 1;
+            last = now;
+        }
+    };
+    app.addPreDrawCallback(updateClockCallback);
+
+    // Add pre-draw callback to update the staging buffer
+    auto updateStagingCallback = std::make_shared<std::function<void(VulkanApp<F>&,uint32_t)>>();
+    uint lastFrame = 0;
+    bool descending = true;
+    *updateStagingCallback = [
+        &stagingBuffer, 
+        offset=bgPalette3Color2.srcOffset, 
+        &currentFrame, 
+        &lastFrame,
+        &descending
+    ] (VulkanApp<F>&,uint32_t){
+        // Update palette cycle
+        if (currentFrame - lastFrame >= 4) {
+            stagingBuffer->mapAndExecute(offset, sizeof(uint8_t), [&descending](void* map){
+                uint8_t* color = (uint8_t*) map;
+                if (*color == 0x37 || *color == 0x7) {
+                    descending = !descending;
+                }
+                *color += descending ? -0x10 : 0x10;
+            });
+            lastFrame = currentFrame;
+        }
+    };
+    app.addPreDrawCallback(updateStagingCallback);
+
     // Graphics descriptors
     std::vector<std::shared_ptr<Descriptor>> graphicsDesc = {
         std::make_shared<UniformBufferDescriptor<UniformBufferObject, F>>(
@@ -133,16 +202,7 @@ int main(int argc, char** argv) {
     // Create render graph
     std::unique_ptr<RenderGraph<F>> renderGraph = std::make_unique<RenderGraph<F>>(app.getDevice());
 
-    auto computeNode = renderGraph->addNode(
-        std::make_unique<ComputeNode<F>>(
-            std::make_unique<CompMat>(
-                app.getDevice(),
-                app.getPhysicalDevice(),
-                computeDesc,
-                readFile(pathPrefix + "shaders/spirv/nes.comp.spirv")),
-            app.getDevice(),
-            app.getComputeQueue(),
-            app.getComputeCommandBuffers()));
+    auto computeNode = renderGraph->addNode(std::move(ppuCompute));
 
     auto graphicsNode = renderGraph->addNode(
         std::make_unique<RenderableNode<F>>(

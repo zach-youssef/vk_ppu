@@ -56,8 +56,9 @@ layout(std430, binding = 2) uniform readonly Control {
     uint8_t backgroundTileset;
     uint8_t spriteTileset;
     uint8_t nametableStart;
+    uint8_t yOffset;
     // Align to 16 bytes for compatibility
-    uint8_t padding[8]; 
+    uint8_t padding[7]; 
 } control;
 
 layout(binding = 3, rgba8) uniform writeonly image2D frame;
@@ -262,7 +263,7 @@ void reduceScanlineSprites(uint x, uint y) {
 
 void main() {
     uint x = uint(gl_LocalInvocationID.x);
-    uint y = uint(gl_GlobalInvocationID.y);
+    uint y = uint(gl_GlobalInvocationID.y) + control.yOffset;
 
     // Reduce OAM to find the up to 8 sprites relevant to this frame
     reduceScanlineSprites(x, y);
