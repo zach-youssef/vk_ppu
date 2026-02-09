@@ -268,9 +268,8 @@ void main() {
     // Reduce OAM to find the up to 8 sprites relevant to this frame
     reduceScanlineSprites(x, y);
 
-    // TEST - for SMB3 Home Screen, swap name tables after
-    // scanline 192
-    uint nameTableIdx = y < 192 ? 0 : 2;
+    // TODO: scroll into correct nametable
+    uint nameTableIdx = control.nametableStart;
 
     // Fetch background tile
     uint tileX = uint(x / 8);

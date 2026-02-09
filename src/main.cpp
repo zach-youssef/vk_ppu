@@ -135,17 +135,34 @@ int main(int argc, char** argv) {
                                                        (uint8_t*)yOffsetMapping.get());
     
     // Configure pre and mid frame updates to the PPU memory
+
     // TEST: SMB3 title screen palette cycle
     VkBufferCopy bgPalette3Color2;
+    bgPalette3Color2.srcOffset = offsetof(StagingData, bgPalette3Color2);
     bgPalette3Color2.dstOffset = offsetof(nes::PPUMemory, backgroundPalettes[3])
                                + offsetof(nes::Palette, data[2]);
-    bgPalette3Color2.srcOffset = offsetof(StagingData, bgPalette3Color2);
     bgPalette3Color2.size = sizeof(uint8_t);
     MemoryUpdate paletteCycle {ppuUbo->getBuffer(), {bgPalette3Color2}};
     ppuCompute->addUpdate(0, paletteCycle);
-    // Initialize the staging buffer with the right starting color
-    stagingBuffer->mapAndExecute(bgPalette3Color2.srcOffset, sizeof(uint8_t), [](void* map){
-        *((uint8_t*) map) = 0x17;
+
+    // TEST: SMB3 title screen nametable swap
+    VkBufferCopy startingNametable;
+    startingNametable.srcOffset = offsetof(StagingData, startingNametable);
+    startingNametable.dstOffset = offsetof(nes::Control, nametableStart);
+    startingNametable.size = sizeof(uint8_t);
+    ppuCompute->addUpdate(0, MemoryUpdate{ctrlUbo->getBuffer(), {startingNametable}});
+
+    VkBufferCopy midframeNametable = startingNametable;
+    midframeNametable.srcOffset = offsetof(StagingData, midframeNametable);
+    // TODO: Crashes
+    //ppuCompute->addUpdate(192, MemoryUpdate{ctrlUbo->getBuffer(), {midframeNametable}});
+
+    // Initialize the staging buffer with the right starting color & nametables
+    stagingBuffer->mapAndExecute(bgPalette3Color2.srcOffset, sizeof(StagingData), [](void* map){
+        StagingData* data = (StagingData*) map;
+        data->bgPalette3Color2 = 0x17;
+        data->startingNametable = 0;
+        data->midframeNametable = 2;
     });
 
     // Add pre-draw callback to update a clock
