@@ -15,16 +15,9 @@
 #include "NesMemory.h"
 #include "ImageToScreenRenderable.h"
 #include "PpuComputeNode.h"
+#include "MemoryUpdateComposer.h"
 
 static const std::string pathPrefix = "/Users/zyoussef/code/ppu/";
-
-struct StagingData {
-    uint8_t bgPalette3Color2;
-    uint8_t startingNametable;
-    uint8_t midframeNametable;
-    uint8_t yOffset0;
-    uint8_t yOffset1;
-};
 
 template<typename T>
 std::unique_ptr<Buffer<T>> createUboFromStruct(T t, VulkanApp<F>& app, 
@@ -113,15 +106,35 @@ int main(int argc, char** argv) {
             std::array<VkImageView, F>{frameTexture->getImageView()})
     };
 
-    // Create staging buffer for updates to our GPU memory
-    std::unique_ptr<Buffer<StagingData>> stagingBuffer;
-    Buffer<StagingData>::create(stagingBuffer,
-                                1,
-                                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                app.getDevice(),
-                                app.getPhysicalDevice());
 
+    
+    // Configure pre and mid frame updates to the PPU memory
+    MemoryUpdateComposer composer(ppuUbo->getBuffer(), 
+                                  oamUbo->getBuffer(), 
+                                  ctrlUbo->getBuffer(), 
+                                  offsetof(nes::Control, yOffset));
+    uint8_t initialColor = 0x17;
+    auto bgPalette3Color2 = composer.addStagingField(BufferIndex::PPU,
+                                                     offsetof(nes::PPUMemory, backgroundPalettes[3]) 
+                                                        + offsetof(nes::Palette, data[2]),
+                                                     sizeof(uint8_t),
+                                                     &initialColor);
+    uint8_t startNametableIdx = 0x00;
+    auto startingNametable = composer.addStagingField(BufferIndex::CONTROL,
+                                                      offsetof(nes::Control, nametableStart),
+                                                      sizeof(uint8_t),
+                                                      &startNametableIdx);
+    uint8_t endNametableIdx = 0x02;
+    auto midframeNametable = composer.addStagingField(BufferIndex::CONTROL,
+                                                      offsetof(nes::Control, nametableStart),
+                                                      sizeof(uint8_t),
+                                                      &endNametableIdx);
+    composer.addUpdate(bgPalette3Color2, 0);
+    composer.addUpdate(startingNametable, 0);
+    composer.addUpdate(midframeNametable, 192);
+
+    // Create staging buffer for updates to our GPU memory
+    auto stagingBuffer = composer.produceStagingBuffer(app);
     // Create compute node that controls our PPU rendering
     auto ppuCompute = std::make_unique<PpuComputeNode>(app.getDevice(),
                                                        app.getPhysicalDevice(),
@@ -130,49 +143,8 @@ int main(int argc, char** argv) {
                                                        computeDesc,
                                                        readFile(pathPrefix + "shaders/spirv/nes.comp.spirv"),
                                                        stagingBuffer->getBuffer());
-    
-    // Configure pre and mid frame updates to the PPU memory
-
-    // TEST: SMB3 title screen palette cycle
-    VkBufferCopy bgPalette3Color2;
-    bgPalette3Color2.srcOffset = offsetof(StagingData, bgPalette3Color2);
-    bgPalette3Color2.dstOffset = offsetof(nes::PPUMemory, backgroundPalettes[3])
-                               + offsetof(nes::Palette, data[2]);
-    bgPalette3Color2.size = sizeof(uint8_t);
-    MemoryUpdate paletteCycle {ppuUbo->getBuffer(), {bgPalette3Color2}};
-    ppuCompute->addUpdate(0, paletteCycle);
-
-    // TEST: SMB3 title screen nametable swap
-    VkBufferCopy startingNametable;
-    startingNametable.srcOffset = offsetof(StagingData, startingNametable);
-    startingNametable.dstOffset = offsetof(nes::Control, nametableStart);
-    startingNametable.size = sizeof(uint8_t);
-    VkBufferCopy yOffset0;
-    yOffset0.srcOffset = offsetof(StagingData, yOffset0);
-    yOffset0.dstOffset = offsetof(nes::Control, yOffset);
-    yOffset0.size = sizeof(uint8_t);
-    ppuCompute->addUpdate(0, MemoryUpdate{ctrlUbo->getBuffer(), {startingNametable, yOffset0}});
-
-
-    VkBufferCopy midframeNametable;
-    midframeNametable.srcOffset = offsetof(StagingData, midframeNametable);
-    midframeNametable.dstOffset = offsetof(nes::Control, nametableStart);
-    midframeNametable.size = sizeof(uint8_t);
-    VkBufferCopy yOffset1;
-    yOffset1.srcOffset = offsetof(StagingData, yOffset1);
-    yOffset1.dstOffset = offsetof(nes::Control, yOffset);
-    yOffset1.size = sizeof(uint8_t);
-    ppuCompute->addUpdate(192, MemoryUpdate{ctrlUbo->getBuffer(), {midframeNametable, yOffset1}});
-
-    // Initialize the staging buffer with the right starting color & nametables
-    stagingBuffer->mapAndExecute(bgPalette3Color2.srcOffset, sizeof(StagingData), [](void* map){
-        StagingData* data = (StagingData*) map;
-        data->bgPalette3Color2 = 0x17;
-        data->startingNametable = 0;
-        data->midframeNametable = 2;
-        data->yOffset0 = 0;
-        data->yOffset1 = 192;
-    });
+    // Add our composed updates to the compute node
+    composer.populateUpdates(*ppuCompute);
 
     // Add pre-draw callback to update a clock
     auto last = std::chrono::system_clock::now();
@@ -195,7 +167,7 @@ int main(int argc, char** argv) {
     bool descending = true;
     *updateStagingCallback = [
         &stagingBuffer, 
-        offset=bgPalette3Color2.srcOffset, 
+        offset=bgPalette3Color2.stagingDataOffset, 
         &currentFrame, 
         &lastFrame,
         &descending

@@ -57,6 +57,8 @@ public:
         if (initialValue != nullptr) {
             memcpy(stagingData_.data() + handle.stagingDataOffset, initialValue, size);
         }
+
+        return handle;
     }
 
     void addUpdate(StagingRegionHandle regionHandle, uint scanline) {
