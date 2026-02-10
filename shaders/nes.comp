@@ -268,8 +268,12 @@ void main() {
     // Reduce OAM to find the up to 8 sprites relevant to this frame
     reduceScanlineSprites(x, y);
 
-    // TODO: scroll into correct nametable
-    uint nameTableIdx = control.nametableStart;
+    // Scroll into correct nametable
+    uint nameTableIdxY = ((y + control.yScroll) % 480) / 240;
+    uint nameTableIdxX = ((x + control.xScroll) % 512) / 256;
+    uint nameTableIdx = (control.nametableStart + (nameTableIdxY * 2) + nameTableIdxX) % 4;
+    y = y % 240;
+    x = x % 256;
 
     // Fetch background tile
     uint tileX = uint(x / 8);
