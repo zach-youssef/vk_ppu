@@ -5,7 +5,6 @@
 
 void PpuComputeNode::submit(RenderEvalContext& ctx) {
     static const uint SCANLINES = 240;
-    *yOffsetPtr_ = 0;
     uint scanlinesRendered = 0;
     bool wait = true;
 
@@ -19,7 +18,6 @@ void PpuComputeNode::submit(RenderEvalContext& ctx) {
             computeMaterial_.setScanlineCount(scanlinesToRender), 
             submitScanlineBatch(ctx, wait, false);
             scanlinesRendered += scanlinesToRender;
-            *yOffsetPtr_ = scanlinesRendered;
             wait = false;
         }
     }
@@ -31,7 +29,7 @@ void PpuComputeNode::submit(RenderEvalContext& ctx) {
         applyUpdates(update);
 
         // Dispatch scanlines until the next update (or end of frame if there are none)
-        uint renderUntil = (updateItr++ == updates_.end()) ? SCANLINES : updateItr->first;
+        uint renderUntil = (++updateItr == updates_.end()) ? SCANLINES : updateItr->first;
         uint scanlinesToRender = renderUntil - scanlinesRendered;
 
         computeMaterial_.setScanlineCount(scanlinesToRender);
@@ -39,7 +37,6 @@ void PpuComputeNode::submit(RenderEvalContext& ctx) {
         submitScanlineBatch(ctx, wait, scanlinesToRender + scanlinesRendered >= SCANLINES);
 
         scanlinesRendered += scanlinesToRender;
-        *yOffsetPtr_ = scanlinesRendered;
         wait = false;
     }
 
@@ -112,6 +109,7 @@ void PpuComputeNode::applyUpdate(const MemoryUpdate& update) {
     submitInfo.pCommandBuffers = &commandBuffers_[0];
 
     vkCmdCopyBuffer(commandBuffers_[0], stagingBuffer_, update.dst, update.regions.size(), update.regions.data());
+    vkEndCommandBuffer(commandBuffers_[0]);
     
     // Submit command buffer
     vkQueueSubmit(computeQueue_, 1, &submitInfo, VK_NULL_HANDLE);

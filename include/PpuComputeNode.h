@@ -20,14 +20,12 @@ public:
                    std::array<VkCommandBuffer, F> commandBuffers,
                    std::vector<std::shared_ptr<Descriptor>> descriptors,
                    const std::vector<char> & computeShaderCode,
-                   VkBuffer stagingBuffer,
-                   uint8_t* yOffsetPtr)
+                   VkBuffer stagingBuffer)
     : RenderNode<F>(device), 
       computeMaterial_(device, physicalDevice, descriptors, computeShaderCode), 
       stagingBuffer_(stagingBuffer),
       computeQueue_(computeQueue),
-      commandBuffers_(commandBuffers),
-      yOffsetPtr_(yOffsetPtr) {}
+      commandBuffers_(commandBuffers){}
 
     void submit(RenderEvalContext& ctx) override;
 
@@ -78,7 +76,4 @@ private:
     VkQueue computeQueue_;
     std::array<VkCommandBuffer, F> commandBuffers_;
     std::map<uint, std::vector<MemoryUpdate>> updates_{};
-
-    // Safety Warning - pointer managed elsewhere
-    uint8_t* yOffsetPtr_;
 };

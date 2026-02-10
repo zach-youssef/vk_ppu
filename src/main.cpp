@@ -22,6 +22,8 @@ struct StagingData {
     uint8_t bgPalette3Color2;
     uint8_t startingNametable;
     uint8_t midframeNametable;
+    uint8_t yOffset0;
+    uint8_t yOffset1;
 };
 
 template<typename T>
@@ -63,7 +65,7 @@ int main(int argc, char** argv) {
     // Create Control ubo
     // (TEST: settings for current scene)
     nes::Control ctrl{0, 0, 1, 0, 1, 0, 0, {0,0,0,0,0,0,0}};
-    auto ctrlUbo = createUboFromStruct<nes::Control>(ctrl, app, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    auto ctrlUbo = createUboFromStruct<nes::Control>(ctrl, app);
 
     // Construct M, V, P matrices
     auto model = glm::identity<glm::mat4>();
@@ -111,10 +113,6 @@ int main(int argc, char** argv) {
             std::array<VkImageView, F>{frameTexture->getImageView()})
     };
 
-    // Mapping to the 'yOffset' control value so the PPU node can control
-    // dispatches of scanline bunches
-    auto yOffsetMapping = ctrlUbo->getPersistentMapping(offsetof(nes::Control, yOffset), sizeof(uint8_t));
-
     // Create staging buffer for updates to our GPU memory
     std::unique_ptr<Buffer<StagingData>> stagingBuffer;
     Buffer<StagingData>::create(stagingBuffer,
@@ -131,8 +129,7 @@ int main(int argc, char** argv) {
                                                        app.getComputeCommandBuffers(),
                                                        computeDesc,
                                                        readFile(pathPrefix + "shaders/spirv/nes.comp.spirv"),
-                                                       stagingBuffer->getBuffer(),
-                                                       (uint8_t*)yOffsetMapping.get());
+                                                       stagingBuffer->getBuffer());
     
     // Configure pre and mid frame updates to the PPU memory
 
@@ -150,12 +147,22 @@ int main(int argc, char** argv) {
     startingNametable.srcOffset = offsetof(StagingData, startingNametable);
     startingNametable.dstOffset = offsetof(nes::Control, nametableStart);
     startingNametable.size = sizeof(uint8_t);
-    ppuCompute->addUpdate(0, MemoryUpdate{ctrlUbo->getBuffer(), {startingNametable}});
+    VkBufferCopy yOffset0;
+    yOffset0.srcOffset = offsetof(StagingData, yOffset0);
+    yOffset0.dstOffset = offsetof(nes::Control, yOffset);
+    yOffset0.size = sizeof(uint8_t);
+    ppuCompute->addUpdate(0, MemoryUpdate{ctrlUbo->getBuffer(), {startingNametable, yOffset0}});
 
-    VkBufferCopy midframeNametable = startingNametable;
+
+    VkBufferCopy midframeNametable;
     midframeNametable.srcOffset = offsetof(StagingData, midframeNametable);
-    // TODO: Crashes
-    //ppuCompute->addUpdate(192, MemoryUpdate{ctrlUbo->getBuffer(), {midframeNametable}});
+    midframeNametable.dstOffset = offsetof(nes::Control, nametableStart);
+    midframeNametable.size = sizeof(uint8_t);
+    VkBufferCopy yOffset1;
+    yOffset1.srcOffset = offsetof(StagingData, yOffset1);
+    yOffset1.dstOffset = offsetof(nes::Control, yOffset);
+    yOffset1.size = sizeof(uint8_t);
+    ppuCompute->addUpdate(192, MemoryUpdate{ctrlUbo->getBuffer(), {midframeNametable, yOffset1}});
 
     // Initialize the staging buffer with the right starting color & nametables
     stagingBuffer->mapAndExecute(bgPalette3Color2.srcOffset, sizeof(StagingData), [](void* map){
@@ -163,6 +170,8 @@ int main(int argc, char** argv) {
         data->bgPalette3Color2 = 0x17;
         data->startingNametable = 0;
         data->midframeNametable = 2;
+        data->yOffset0 = 0;
+        data->yOffset1 = 192;
     });
 
     // Add pre-draw callback to update a clock
