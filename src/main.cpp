@@ -16,8 +16,30 @@
 #include "ImageToScreenRenderable.h"
 #include "PpuComputeNode.h"
 #include "MemoryUpdateComposer.h"
+#include "GameClock.h"
 
 static const std::string pathPrefix = "/Users/zyoussef/code/ppu/";
+
+class SMB3PaletteCycle : public GameClock::UpdateFunction {
+public:
+    SMB3PaletteCycle(StagingRegionHandle handle): GameClock::UpdateFunction(handle) {}
+
+    void execute(void* mappedData) override {
+        uint8_t* color = (uint8_t*) mappedData;
+        if (*color == 0x37 || *color == 0x7) {
+            descending_ = !descending_;
+        }
+        *color += descending_ ? -0x10 : 0x10;
+    }
+
+protected:
+    uint getFrequency() const override {
+        return 4;
+    }
+
+private:
+    bool descending_ = true;
+};
 
 template<typename T>
 std::unique_ptr<Buffer<T>> createUboFromStruct(T t, VulkanApp<F>& app, 
@@ -146,45 +168,11 @@ int main(int argc, char** argv) {
     // Add our composed updates to the compute node
     composer.populateUpdates(*ppuCompute);
 
-    // Add pre-draw callback to update a clock
-    auto last = std::chrono::system_clock::now();
-    auto now = std::chrono::system_clock::now();
-    long currentFrame = 0;
-    auto updateClockCallback = std::make_shared<std::function<void(VulkanApp<F>&,uint32_t)>>();
-    *updateClockCallback = [&last, &now, &currentFrame] (VulkanApp<F>&,uint32_t) {
-        now = std::chrono::system_clock::now();
-        auto deltaTime = std::chrono::duration_cast<std::chrono::microseconds>(now - last);
-        if (deltaTime.count() >= 16666) {
-            currentFrame += 1;
-            last = now;
-        }
-    };
-    app.addPreDrawCallback(updateClockCallback);
 
-    // Add pre-draw callback to update the staging buffer
-    auto updateStagingCallback = std::make_shared<std::function<void(VulkanApp<F>&,uint32_t)>>();
-    uint lastFrame = 0;
-    bool descending = true;
-    *updateStagingCallback = [
-        &stagingBuffer, 
-        offset=bgPalette3Color2.stagingDataOffset, 
-        &currentFrame, 
-        &lastFrame,
-        &descending
-    ] (VulkanApp<F>&,uint32_t){
-        // Update palette cycle
-        if (currentFrame - lastFrame >= 4) {
-            stagingBuffer->mapAndExecute(offset, sizeof(uint8_t), [&descending](void* map){
-                uint8_t* color = (uint8_t*) map;
-                if (*color == 0x37 || *color == 0x7) {
-                    descending = !descending;
-                }
-                *color += descending ? -0x10 : 0x10;
-            });
-            lastFrame = currentFrame;
-        }
-    };
-    app.addPreDrawCallback(updateStagingCallback);
+    // Add game clock with an update for our palette cycle
+    GameClock gameClock(*stagingBuffer);
+    gameClock.addUpdator(std::make_unique<SMB3PaletteCycle>(bgPalette3Color2));
+    app.addPreDrawCallback(gameClock.getCallback());
 
     // Graphics descriptors
     std::vector<std::shared_ptr<Descriptor>> graphicsDesc = {
