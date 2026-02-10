@@ -1,24 +1,5 @@
-#include <VulkanApp.h>
-#include <Ubo.h>
-#include <RenderableNode.h>
-#include <ComputeNode.h>
-#include <AcquireImageNode.h>
-#include <PresentNode.h>
-#include <BasicMaterial.h>
-
-#include <iostream>
-#include <iterator>
-#include <fstream>
-
-#include <glm/ext.hpp>
-
 #include "NesMemory.h"
-#include "ImageToScreenRenderable.h"
-#include "PpuComputeNode.h"
-#include "MemoryUpdateComposer.h"
-#include "GameClock.h"
-
-static const std::string pathPrefix = "/Users/zyoussef/code/ppu/";
+#include "PpuSession.h"
 
 class SMB3PaletteCycle : public GameClock::UpdateFunction {
 public:
@@ -41,187 +22,41 @@ private:
     bool descending_ = true;
 };
 
-template<typename T>
-std::unique_ptr<Buffer<T>> createUboFromStruct(T t, VulkanApp<F>& app, 
-                                              VkMemoryPropertyFlags memFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
-    std::unique_ptr<Buffer<T>> ubo;
-    Buffer<T>::createAndInitialize(ubo, 
-                                   {t}, 
-                                   VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
-                                   memFlags,
-                                   app.getDevice(), 
-                                   app.getPhysicalDevice(), 
-                                   app.getGraphicsQueue(), 
-                                   app.getCommandPool());
-    return ubo;
-}
-
-template<typename T>
-std::unique_ptr<Buffer<T>> createUboFromFile(const std::string& path, VulkanApp<F>& app) {
-    std::ifstream dumpFile(pathPrefix + path, std::ios::binary);
-    std::vector<uint8_t> buffer(std::istreambuf_iterator<char>(dumpFile), {});
-    T memStruct;
-    std::memcpy(&memStruct, buffer.data(), sizeof(T));
-
-    // Upload PPU memory to a uniform buffer
-    return createUboFromStruct<T>(memStruct, app);
-}
-
 int main(int argc, char** argv) {
-    VulkanApp<F> app(240, 256);
-    app.init();
+    PpuSessionConfig nesConfig{256, offsetof(nes::Control, yOffset)};
+    PpuSession<nes::PPUMemory, nes::OAM, nes::Control> nesSession(nesConfig);
 
-    // Read PPU dump into a uniform buffer
-    auto ppuUbo = createUboFromFile<nes::PPUMemory>("ppu_dump.bin", app);
-                                            
-    // Read OAM dump into a uniform buffer
-    auto oamUbo = createUboFromFile<nes::OAM>("oam_dump.bin", app);
+    nesSession.init("ppu_dump.bin",
+                    "oam_dump.bin",
+                    nes::Control{0, 0, 1, 0, 1, 0, 0, {0,0,0,0,0,0,0}},
+                    "shaders/spirv/nes.comp.spirv",
+                    [](MemoryUpdateComposer& composer) {
+                        uint8_t initialColor = 0x17;
+                        auto bgPalette3Color2 = composer.addStagingField(BufferIndex::PPU,
+                                                                        offsetof(nes::PPUMemory, backgroundPalettes[3]) 
+                                                                            + offsetof(nes::Palette, data[2]),
+                                                                        sizeof(uint8_t),
+                                                                        &initialColor);
+                        uint8_t startNametableIdx = 0x00;
+                        auto startingNametable = composer.addStagingField(BufferIndex::CONTROL,
+                                                                        offsetof(nes::Control, nametableStart),
+                                                                        sizeof(uint8_t),
+                                                                        &startNametableIdx);
+                        uint8_t endNametableIdx = 0x02;
+                        auto midframeNametable = composer.addStagingField(BufferIndex::CONTROL,
+                                                                        offsetof(nes::Control, nametableStart),
+                                                                        sizeof(uint8_t),
+                                                                        &endNametableIdx);
+                        composer.addUpdate(bgPalette3Color2, 0);
+                        composer.addUpdate(startingNametable, 0);
+                        composer.addUpdate(midframeNametable, 192);
 
-    // Create Control ubo
-    // (TEST: settings for current scene)
-    nes::Control ctrl{0, 0, 1, 0, 1, 0, 0, {0,0,0,0,0,0,0}};
-    auto ctrlUbo = createUboFromStruct<nes::Control>(ctrl, app);
+                        UpdateList updateList;
+                        updateList.emplace_back(std::move(std::make_unique<SMB3PaletteCycle>(bgPalette3Color2)));
+                        return updateList;
+                    });
 
-    // Construct M, V, P matrices
-    auto model = glm::identity<glm::mat4>();
-    auto view = glm::identity<glm::mat4>();
-    auto projection = glm::ortho(-1.0, 1.0, -1.0, 1.0);
-    // GLM was originally designed for OpenGL where the Y coordinate of the clip coordinates is inverted
-    projection[1][1] *= -1;
-
-    // Upload MVP UBO to a uniform buffer
-    std::unique_ptr<Buffer<UniformBufferObject>> mvpUbo = createUboFromStruct<UniformBufferObject>(
-        UniformBufferObject::fromModelViewProjection(model, view, projection), 
-        app);
-
-    // Create image to store frame texture
-    std::unique_ptr<Image> frameTexture;
-    Image::createEmptyRGBA(frameTexture, 
-                           256, 
-                           240, 
-                           app.getGraphicsQueue(), 
-                           app.getCommandPool(), 
-                           app.getDevice(), 
-                           app.getPhysicalDevice());
-
-    // Create texture sampler
-    std::unique_ptr<VulkanSampler> sampler;
-    VulkanSampler::createWithModeAndFilter(sampler,
-                                           VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                                           VK_FILTER_NEAREST,
-                                           app.getDevice(),
-                                           app.getPhysicalDevice()); 
-
-    // Compute descriptors
-    std::vector<std::shared_ptr<Descriptor>> computeDesc = {
-        std::make_shared<UniformBufferDescriptor<nes::PPUMemory, F>>(
-            std::array<VkBuffer, F>{ppuUbo->getBuffer()}, 
-            VK_SHADER_STAGE_COMPUTE_BIT),
-        std::make_shared<UniformBufferDescriptor<nes::OAM, F>>(
-            std::array<VkBuffer, F>{oamUbo->getBuffer()}, 
-            VK_SHADER_STAGE_COMPUTE_BIT),
-        std::make_shared<UniformBufferDescriptor<nes::Control, F>>(
-            std::array<VkBuffer, F>{ctrlUbo->getBuffer()}, 
-            VK_SHADER_STAGE_COMPUTE_BIT),
-        std::make_shared<StorageImageDescriptor<F>>(
-            VK_SHADER_STAGE_COMPUTE_BIT, 
-            std::array<VkImageView, F>{frameTexture->getImageView()})
-    };
-
-
-    
-    // Configure pre and mid frame updates to the PPU memory
-    MemoryUpdateComposer composer(ppuUbo->getBuffer(), 
-                                  oamUbo->getBuffer(), 
-                                  ctrlUbo->getBuffer(), 
-                                  offsetof(nes::Control, yOffset));
-    uint8_t initialColor = 0x17;
-    auto bgPalette3Color2 = composer.addStagingField(BufferIndex::PPU,
-                                                     offsetof(nes::PPUMemory, backgroundPalettes[3]) 
-                                                        + offsetof(nes::Palette, data[2]),
-                                                     sizeof(uint8_t),
-                                                     &initialColor);
-    uint8_t startNametableIdx = 0x00;
-    auto startingNametable = composer.addStagingField(BufferIndex::CONTROL,
-                                                      offsetof(nes::Control, nametableStart),
-                                                      sizeof(uint8_t),
-                                                      &startNametableIdx);
-    uint8_t endNametableIdx = 0x02;
-    auto midframeNametable = composer.addStagingField(BufferIndex::CONTROL,
-                                                      offsetof(nes::Control, nametableStart),
-                                                      sizeof(uint8_t),
-                                                      &endNametableIdx);
-    composer.addUpdate(bgPalette3Color2, 0);
-    composer.addUpdate(startingNametable, 0);
-    composer.addUpdate(midframeNametable, 192);
-
-    // Create staging buffer for updates to our GPU memory
-    auto stagingBuffer = composer.produceStagingBuffer(app);
-    // Create compute node that controls our PPU rendering
-    auto ppuCompute = std::make_unique<PpuComputeNode>(app.getDevice(),
-                                                       app.getPhysicalDevice(),
-                                                       app.getComputeQueue(),
-                                                       app.getComputeCommandBuffers(),
-                                                       computeDesc,
-                                                       readFile(pathPrefix + "shaders/spirv/nes.comp.spirv"),
-                                                       stagingBuffer->getBuffer());
-    // Add our composed updates to the compute node
-    composer.populateUpdates(*ppuCompute);
-
-
-    // Add game clock with an update for our palette cycle
-    GameClock gameClock(*stagingBuffer);
-    gameClock.addUpdator(std::make_unique<SMB3PaletteCycle>(bgPalette3Color2));
-    app.addPreDrawCallback(gameClock.getCallback());
-
-    // Graphics descriptors
-    std::vector<std::shared_ptr<Descriptor>> graphicsDesc = {
-        std::make_shared<UniformBufferDescriptor<UniformBufferObject, F>>(
-            std::array<VkBuffer, F>{mvpUbo->getBuffer()}, 
-            VK_SHADER_STAGE_VERTEX_BIT),
-        std::make_shared<CombinedImageSamplerDescriptor<F>>(
-            VK_SHADER_STAGE_FRAGMENT_BIT, 
-            std::array<VkImageView, F>{frameTexture->getImageView()},
-            **sampler)
-    };
-
-    // Create render graph
-    std::unique_ptr<RenderGraph<F>> renderGraph = std::make_unique<RenderGraph<F>>(app.getDevice());
-
-    auto computeNode = renderGraph->addNode(std::move(ppuCompute));
-
-    auto graphicsNode = renderGraph->addNode(
-        std::make_unique<RenderableNode<F>>(
-            std::make_unique<ImageToScreenRenderable<F>>(
-                std::make_unique<BasicMaterial<F, 2>>(
-                    app.getDevice(),
-                    app.getPhysicalDevice(),
-                    graphicsDesc,
-                    app.getSwapchainExtent(),
-                    app.getRenderPass(),
-                    readFile(pathPrefix + "shaders/spirv/draw.vert.spirv"),
-                    readFile(pathPrefix + "shaders/spirv/draw.frag.spirv"),
-                    SimpleVertex::getBindingDescription(),
-                    SimpleVertex::getAttributeDescriptions()),
-                app.getDevice(),
-                app.getPhysicalDevice(),
-                app.getGraphicsQueue(),
-                app.getCommandPool()),
-            app.getDevice(),
-            app.getGraphicsQueue(),
-            app.getRenderPass(),
-            app.getGraphicsCommandBuffers()));
-
-    auto acquireImageNode = renderGraph->addNode(std::make_unique<AcquireImageNode<F>>(app.getDevice()));
-    auto presentNode = renderGraph->addNode(std::make_unique<PresentNode<F>>(app.getDevice(), app.getPresentQueue()));
-
-    renderGraph->addEdge(computeNode, graphicsNode);
-    renderGraph->addEdge(acquireImageNode, graphicsNode);
-    renderGraph->addEdge(graphicsNode, presentNode);
-
-    app.setRenderGraph(std::move(renderGraph));
-
-    app.run();
+    nesSession.run();
 
     return 0;
 }

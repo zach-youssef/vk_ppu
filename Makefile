@@ -27,7 +27,7 @@ shaders/spirv/%.frag.spirv : shaders/%.frag
 shaders/spirv/%.vert.spirv : shaders/%.vert
 	glslc $^ -o $@
 
-_OBJ = main.o PpuComputeNode.o
+_OBJ = PpuComputeNode.o MemoryUpdateComposer.o PpuSession.o main.o
 OBJ = $(patsubst %,$(OUT)/%,$(_OBJ))
 
 _SHADERS = nes.comp draw.frag draw.vert

@@ -1,12 +1,13 @@
 #pragma once
 
 #include "PpuComputeNode.h"
-
-#include <VulkanApp.h>
+#include "Constants.h"
 
 #include <vulkan/vulkan.h>
 
 #include <vector>
+
+template <uint T> class VulkanApp;
 
 enum BufferIndex {
     PPU = 0,
@@ -72,21 +73,7 @@ public:
         addUpdateInternal(regionHandle, scanline);
     }
 
-    std::unique_ptr<Buffer<uint8_t>> produceStagingBuffer(VulkanApp<F>& app) {
-        std::unique_ptr<Buffer<uint8_t>> stagingBuffer;
-        Buffer<uint8_t>::create(stagingBuffer,
-                                stagingData_.size(),
-                                VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                app.getDevice(),
-                                app.getPhysicalDevice());
-        
-        stagingBuffer->mapAndExecute(0, stagingData_.size(), [this](void* mappedBuffer){
-            memcpy(mappedBuffer, stagingData_.data(), stagingData_.size());
-        });
-
-        return stagingBuffer;
-    }
+    std::unique_ptr<Buffer<uint8_t>> produceStagingBuffer(VulkanApp<F>& app);
 
     void populateUpdates(PpuComputeNode& ppuNode) {
         for (const auto& updates : updates_) {

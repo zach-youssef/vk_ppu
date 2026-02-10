@@ -4,7 +4,6 @@
 // TODO: Submit single command buffer instead of multiple
 
 void PpuComputeNode::submit(RenderEvalContext& ctx) {
-    static const uint SCANLINES = 240;
     uint scanlinesRendered = 0;
     bool wait = true;
 

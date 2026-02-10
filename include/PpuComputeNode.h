@@ -5,7 +5,7 @@
 
 #include <map>
 
-static const uint F = 1u;
+#include "Constants.h"
 
 struct MemoryUpdate {
     VkBuffer dst;
