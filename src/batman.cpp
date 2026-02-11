@@ -1,5 +1,6 @@
 #include "NesMemory.h"
 #include "PpuSession.h"
+#include "BufferCycler.h"
 
 #include <format>
 #include <fstream>
@@ -32,6 +33,25 @@ private:
     uint8_t idx_ = 0;
 };
 
+class NesOamCycler : public GameClock::UpdateFunction {
+public:
+    NesOamCycler(StagingRegionHandle handle): GameClock::UpdateFunction(handle) {
+        std::ifstream dumpFile(std::format("{}/batman/oam_dump.bin", pathPrefix), std::ios::binary);
+        std::vector<uint8_t> buffer(std::istreambuf_iterator<char>(dumpFile), {});
+        bufferCycler = BufferCycler(std::move(buffer));
+    }
+
+    void execute(void* mappedData) override {
+        memcpy(mappedData, bufferCycler.cycleBuffer(sizeof(nes::Sprite)).data(), handle_.size);
+    }
+protected:
+    uint getFrequency() const override {
+        return 1;
+    }
+private:
+    BufferCycler bufferCycler;
+};
+
 int main(int argc, char** argv) {
     PpuSessionConfig nesConfig{256, offsetof(nes::Control, yOffset)};
     PpuSession<nes::PPUMemory, nes::OAM, nes::Control> nesSession(nesConfig);
@@ -45,8 +65,15 @@ int main(int argc, char** argv) {
                                                                   animOffset,
                                                                   (0xF9 - 0xC0) * sizeof(nes::Tile));
                         composer.addUpdate(animTiles, 0);
+
+                        auto oam = composer.addStagingField(BufferIndex::OAM,
+                                                            0,
+                                                            sizeof(nes::OAM));
+                        composer.addUpdate(oam, 0);
+
                         UpdateList updateList;
                         updateList.emplace_back(std::move(std::make_unique<BatmanTilesetAnimator>(animTiles)));
+                        updateList.emplace_back(std::move(std::make_unique<NesOamCycler>(oam)));
                         return updateList;
                     });
 
