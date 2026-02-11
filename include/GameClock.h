@@ -27,9 +27,9 @@ public:
         }
     protected:
         virtual uint getFrequency() const = 0;
+        StagingRegionHandle handle_;
     private:
         long lastFrame_ = 0;
-        StagingRegionHandle handle_;
     };
 
 public:

@@ -3,6 +3,11 @@
 #include <VulkanApp.h>
 
 std::unique_ptr<Buffer<uint8_t>> MemoryUpdateComposer::produceStagingBuffer(VulkanApp<F>& app) {
+    // Make sure data is nonempty
+    if (stagingData_.empty()) {
+        stagingData_.push_back(0u);
+    }
+
     std::unique_ptr<Buffer<uint8_t>> stagingBuffer;
     Buffer<uint8_t>::create(stagingBuffer,
                             stagingData_.size(),

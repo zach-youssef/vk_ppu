@@ -33,6 +33,9 @@ COMMON = $(patsubst %,$(OUT)/%,$(_COMMON))
 _SMB3 =  smb3.o
 SMB3 = $(patsubst %,$(OUT)/%,$(_SMB3))
 
+_BATMAN =  batman.o
+BATMAN = $(patsubst %,$(OUT)/%,$(_BATMAN))
+
 _SHADERS = nes.comp draw.frag draw.vert
 SHADERS = $(patsubst %,shaders/spirv/%.spirv,$(_SHADERS))
 
@@ -40,8 +43,12 @@ smb3/ppu: $(COMMON) $(SMB3) | $(SHADERS)
 	$(CC) $^ -o $@ $(LDFLAGS) $(LDLIBS)
 	install_name_tool -add_rpath /usr/local/lib ./$@
 
+batman/ppu: $(COMMON) $(BATMAN) | $(SHADERS)
+	$(CC) $^ -o $@ $(LDFLAGS) $(LDLIBS)
+	install_name_tool -add_rpath /usr/local/lib ./$@
+
 .PHONY: clean 
 
 clean:
 	rm -f build/*.o shaders/spirv/*.spirv
-	rm -f smb3/ppu
+	rm -f smb3/ppu batman/ppu
