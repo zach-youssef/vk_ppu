@@ -1,5 +1,5 @@
 .vscode/
 build/
 shaders/spirv/
-ppu
+*/ppu
 *.bin

@@ -27,8 +27,8 @@ int main(int argc, char** argv) {
     PpuSessionConfig nesConfig{256, offsetof(nes::Control, yOffset)};
     PpuSession<nes::PPUMemory, nes::OAM, nes::Control> nesSession(nesConfig);
 
-    nesSession.init("ppu_dump.bin",
-                    "oam_dump.bin",
+    nesSession.init("smb3/ppu_dump.bin",
+                    "smb3/oam_dump.bin",
                     nes::Control{0, 0, 1, 0, 1, 0, 0, {0,0,0,0,0,0,0}},
                     "shaders/spirv/nes.comp.spirv",
                     [](MemoryUpdateComposer& composer) {

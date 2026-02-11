@@ -27,13 +27,16 @@ shaders/spirv/%.frag.spirv : shaders/%.frag
 shaders/spirv/%.vert.spirv : shaders/%.vert
 	glslc $^ -o $@
 
-_OBJ = PpuComputeNode.o MemoryUpdateComposer.o PpuSession.o main.o
-OBJ = $(patsubst %,$(OUT)/%,$(_OBJ))
+_COMMON = PpuComputeNode.o MemoryUpdateComposer.o PpuSession.o
+COMMON = $(patsubst %,$(OUT)/%,$(_COMMON))
+
+_SMB3 =  smb3.o
+SMB3 = $(patsubst %,$(OUT)/%,$(_SMB3))
 
 _SHADERS = nes.comp draw.frag draw.vert
 SHADERS = $(patsubst %,shaders/spirv/%.spirv,$(_SHADERS))
 
-ppu: $(OBJ) | $(SHADERS)
+smb3/ppu: $(COMMON) $(SMB3) | $(SHADERS)
 	$(CC) $^ -o $@ $(LDFLAGS) $(LDLIBS)
 	install_name_tool -add_rpath /usr/local/lib ./$@
 
@@ -41,4 +44,4 @@ ppu: $(OBJ) | $(SHADERS)
 
 clean:
 	rm -f build/*.o shaders/spirv/*.spirv
-	rm -f ppu
+	rm -f smb3/ppu
