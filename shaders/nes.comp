@@ -4,6 +4,8 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 
+#include "bindless.glsl"
+
 // Memory Layout Struct Definitions ----------------------------------
 
 struct Tile {
@@ -35,21 +37,22 @@ struct Sprite {
 // Descriptor Layout -------------------------------------------------
 // -------------------------------------------------------------------
 
-layout(std430, binding = 0) uniform readonly PPUMemory {
+// The PPU's buffers (the layouts match NesMemory.h)
+struct PPUMemory {
     TileSet tileSets[2];
     NameTable nameTables[4];
     uint8_t padding0[3840];
     Palette backgroundPalettes[4];
     Palette spritePalettes[4];
     uint8_t padding1[224];
-} memory;
+};
 
-layout(std430, binding = 1) uniform readonly OAM {
+struct OAM {
     Sprite sprites[64];
-} oam;
+};
 
 // Inspired by but not matching what the NES does
-layout(std430, binding = 2) uniform readonly Control {
+struct Control {
     uint16_t xScroll;
     uint16_t yScroll;
     uint8_t spriteHeight;
@@ -59,9 +62,24 @@ layout(std430, binding = 2) uniform readonly Control {
     uint8_t yOffset;
     // Align to 16 bytes for compatibility
     uint8_t padding[7]; 
-} control;
+};
 
-layout(binding = 3, rgba8) uniform writeonly image2D frame;
+BINDLESS_BUFFER(readonly, PpuMemoryBuffers, PPUMemory, memoryBuffers);
+BINDLESS_BUFFER(readonly, OamBuffers, OAM, oamBuffers);
+BINDLESS_BUFFER(readonly, ControlBuffers, Control, controlBuffers);
+
+// The material's bindings: the buffers above, then the output image
+layout(push_constant) uniform Indices {
+    uint memoryBuffer;
+    uint oamBuffer;
+    uint controlBuffer;
+    uint frame;
+} indices;
+
+// The bound buffers, by the names the shader reads them with
+#define memory memoryBuffers[indices.memoryBuffer].data
+#define oam oamBuffers[indices.oamBuffer].data
+#define control controlBuffers[indices.controlBuffer].data
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
@@ -169,6 +187,11 @@ uint sampleTile(Tile tile, uint x, uint y) {
     return (highBit << 1) | lowBit;
 }
 
+// The output image holds sRGB-encoded palette colors
+vec3 linearToSrgb(vec3 color) {
+    return mix(color * 12.92, 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055, greaterThan(color, vec3(0.0031308)));
+}
+
 // -------------------------------------------------------------------
 // Sprite Helpers ----------------------------------------------------
 // -------------------------------------------------------------------
@@ -204,7 +227,7 @@ shared uint[64] workIndices;
         scanlineSprites[x] = select ? s1 : s2;                              \
         workIndices[x] = select ? workIndices[x] : workIndices[x + stride]; \
     }                                                                       \
-    groupMemoryBarrier();                                                   \
+    barrier();                                                              \
 
 
 void reduceScanlineSprites(uint x, uint y) {
@@ -217,7 +240,7 @@ void reduceScanlineSprites(uint x, uint y) {
         scanlineSprites[x].y += uint8_t(1);
         workIndices[x] = x;
     }
-    groupMemoryBarrier();
+    barrier();
 
     // Perform reduction until we have the 8 sprites for this scanline
     REDUCTION_STEP(32)
@@ -322,5 +345,5 @@ void main() {
 
     //  Store output color
     uint8_t colorIdx = pallete.data[indexIntoPalette];
-    imageStore(frame, ivec2(x, y), vec4(vec3(COLORS[colorIdx]) / 255.0, 1.f));
+    imageStore(bindlessStorageImages[indices.frame], ivec2(x, y), vec4(linearToSrgb(vec3(COLORS[colorIdx]) / 255.0), 1.f));
 }

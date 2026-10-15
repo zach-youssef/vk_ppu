@@ -1,13 +1,15 @@
 #pragma once
 
-#include "PpuComputeNode.h"
 #include "Constants.h"
 
 #include <vulkan/vulkan.h>
 
+#include <array>
+#include <cstring>
+#include <map>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
-
-template <uint T> class VulkanApp;
 
 enum BufferIndex {
     PPU = 0,
@@ -22,16 +24,16 @@ struct StagingRegionHandle {
     BufferIndex bufferIndex;
 };
 
+// Copies from the staging data into one of the PPU's buffers
+struct MemoryUpdate {
+    BufferIndex dst;
+    std::vector<VkBufferCopy> regions;
+};
+
 class MemoryUpdateComposer {
 public:
-    MemoryUpdateComposer(VkBuffer ppuMemory, 
-                         VkBuffer oam, 
-                         VkBuffer control, 
-                         size_t yOffsetLocation): yOffsetLocation_(yOffsetLocation) {
-        bufferHandles_[BufferIndex::PPU] = ppuMemory;
-        bufferHandles_[BufferIndex::OAM] = oam;
-        bufferHandles_[BufferIndex::CONTROL] = control;
-    }
+    explicit MemoryUpdateComposer(size_t yOffsetLocation): yOffsetLocation_(yOffsetLocation) {}
+
     // Returns the offset into the staging buffer of the new field
     StagingRegionHandle addStagingField(BufferIndex dstBuffer, 
                                         size_t dstOffset, 
@@ -73,14 +75,20 @@ public:
         addUpdateInternal(regionHandle, scanline);
     }
 
-    std::unique_ptr<Buffer<uint8_t>> produceStagingBuffer(VulkanApp<F>& app);
+    // The staging data's initial contents (never empty)
+    std::vector<uint8_t> stagingData() const {
+        return stagingData_.empty() ? std::vector<uint8_t>{0u} : stagingData_;
+    }
 
-    void populateUpdates(PpuComputeNode& ppuNode) {
+    // The updates to apply before rendering each scanline, by scanline
+    std::map<uint, std::vector<MemoryUpdate>> updates() const {
+        std::map<uint, std::vector<MemoryUpdate>> byScanline;
         for (const auto& updates : updates_) {
             for (const auto& [scanline, update] : updates) {
-                ppuNode.addUpdate(scanline, update);
+                byScanline[scanline].push_back(update);
             }
         }
+        return byScanline;
     }
 
 private:
@@ -90,14 +98,13 @@ private:
         auto& mapping = mappings.at(regionHandle.mappingIndex);
 
         if (updates.find(scanline) == updates.end()) {
-            updates.emplace(scanline, MemoryUpdate{bufferHandles_[regionHandle.bufferIndex], {}});
+            updates.emplace(scanline, MemoryUpdate{regionHandle.bufferIndex, {}});
         }
 
         updates.at(scanline).regions.push_back(mapping);
 
     }
 private:
-    std::array<VkBuffer, 3> bufferHandles_;
     size_t yOffsetLocation_;
 
     std::vector<uint8_t> stagingData_;

@@ -1,7 +1,10 @@
 #pragma once
 
-#include <Renderable.h>
-#include <VkUtil.h>
+#include "materials/Renderable.h"
+
+#include <glm/glm.hpp>
+
+#include <array>
 
 struct SimpleVertex {
     glm::vec2 pos;
@@ -33,15 +36,11 @@ public:
     }
 };
 
-template<uint MAX_FRAMES>
-class ImageToScreenRenderable : public MeshRenderable<SimpleVertex, MAX_FRAMES> {
+// A quad covering the screen
+class ImageToScreenRenderable : public MeshRenderable<SimpleVertex> {
 public:
-    ImageToScreenRenderable<MAX_FRAMES>(
-        std::unique_ptr<Material<MAX_FRAMES>>&& material,
-        VkDevice device, 
-        VkPhysicalDevice physicalDevice, 
-        VkQueue graphicsQueue, 
-        VkCommandPool commandPool): MeshRenderable<SimpleVertex, MAX_FRAMES>(
+    ImageToScreenRenderable(Handle<Material> material, VulkanContext& context)
+    : MeshRenderable<SimpleVertex>(
             std::vector<SimpleVertex>{
                 SimpleVertex{glm::vec2{-1.0f, -1.0f}, glm::vec2{0.0f, 1.0f}},
                 SimpleVertex{glm::vec2{1.0f, -1.0f}, glm::vec2{1.0f, 1.0f}},
@@ -53,8 +52,5 @@ public:
                 2, 3, 0
             }, 
             std::move(material), 
-            device, 
-            physicalDevice, 
-            graphicsQueue, 
-            commandPool) {}
+            context) {}
 };

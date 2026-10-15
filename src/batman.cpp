@@ -6,14 +6,13 @@
 #include <fstream>
 
 static const uint FRAMES = 8;
-static const std::string pathPrefix = "/Users/zyoussef/code/ppu/";
 static const size_t animOffset = offsetof(nes::PPUMemory, tileSets[0]) + offsetof(nes::TileSet, tiles[0xC0]);
 
 class BatmanTilesetAnimator : public GameClock::UpdateFunction {
 public:
     BatmanTilesetAnimator(StagingRegionHandle handle): GameClock::UpdateFunction(handle) {
         for (uint i = 0; i < FRAMES; ++i) {
-            std::ifstream dumpFile(std::format("{}/batman/tileframes/{}.bin", pathPrefix, i), 
+            std::ifstream dumpFile(std::format("{}/batman/tileframes/{}.bin", dataDir, i), 
                                    std::ios::binary);
             ppuDumps_[i] = std::vector<uint8_t>(std::istreambuf_iterator<char>(dumpFile), {});
         }
@@ -36,7 +35,7 @@ private:
 class NesOamCycler : public GameClock::UpdateFunction {
 public:
     NesOamCycler(StagingRegionHandle handle): GameClock::UpdateFunction(handle) {
-        std::ifstream dumpFile(std::format("{}/batman/oam_dump.bin", pathPrefix), std::ios::binary);
+        std::ifstream dumpFile(std::format("{}/batman/oam_dump.bin", dataDir), std::ios::binary);
         std::vector<uint8_t> buffer(std::istreambuf_iterator<char>(dumpFile), {});
         bufferCycler = BufferCycler(std::move(buffer));
     }
@@ -59,7 +58,7 @@ int main(int argc, char** argv) {
     nesSession.init("batman/ppu_dump.bin",
                     "batman/oam_dump.bin",
                     nes::Control{0, 0, 1, 0, 1, 0, 0, {0,0,0,0,0,0,0}},
-                    "shaders/spirv/nes.comp.spirv",
+                    "nes.comp",
                     [](MemoryUpdateComposer& composer) {
                         auto animTiles = composer.addStagingField(BufferIndex::PPU, 
                                                                   animOffset,

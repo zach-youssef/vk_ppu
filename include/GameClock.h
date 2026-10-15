@@ -1,6 +1,8 @@
 #pragma once
 
 #include <chrono>
+#include <memory>
+#include <vector>
 #include "MemoryUpdateComposer.h"
 
 class GameClock {
@@ -33,12 +35,8 @@ public:
     };
 
 public:
-    GameClock(Buffer<uint8_t>& stagingBuffer): stagingBuffer_(stagingBuffer) {
-        callback_ = std::make_shared<std::function<void(VulkanApp<F>&,uint32_t)>>(
-        [this](VulkanApp<F>&,uint32_t) {
-            this->tick();
-        });
-    }
+    // Updators write into stagingData, the CPU's copy of the staging data
+    explicit GameClock(std::vector<uint8_t>& stagingData): stagingData_(stagingData) {}
 
     void addUpdator(std::unique_ptr<UpdateFunction>&& updator) {
         updators_.emplace_back(std::move(updator));
@@ -62,16 +60,9 @@ public:
         // Update all systems that should run
         for (auto& updator : updators_) {
             if (updator->shouldRun(currentFrame_)) {
-                const auto& handle = updator->getHandle();
-                stagingBuffer_.mapAndExecute(handle.stagingDataOffset, handle.size, [&updator](void* mappedData) {
-                    updator->execute(mappedData);
-                });
+                updator->execute(stagingData_.data() + updator->getHandle().stagingDataOffset);
             }
         }
-    }
-
-    std::shared_ptr<std::function<void(VulkanApp<F>&,uint32_t)>>& getCallback() {
-        return callback_;
     }
 
 private:
@@ -80,7 +71,5 @@ private:
    bool fixedStep_ = false;
 
    std::vector<std::unique_ptr<UpdateFunction>> updators_;
-   Buffer<uint8_t>& stagingBuffer_;
-   
-   std::shared_ptr<std::function<void(VulkanApp<F>&,uint32_t)>> callback_;
+   std::vector<uint8_t>& stagingData_;
 };

@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
     nesSession.init("smb3/ppu_dump.bin",
                     "smb3/oam_dump.bin",
                     nes::Control{0, 0, 1, 0, 1, 0, 0, {0,0,0,0,0,0,0}},
-                    "shaders/spirv/nes.comp.spirv",
+                    "nes.comp",
                     [](MemoryUpdateComposer& composer) {
                         uint8_t initialColor = 0x17;
                         auto bgPalette3Color2 = composer.addStagingField(BufferIndex::PPU,
