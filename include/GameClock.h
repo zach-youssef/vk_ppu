@@ -44,11 +44,17 @@ public:
         updators_.emplace_back(std::move(updator));
     }
 
+    // Advances one game frame per tick instead of following the wall clock, so that captured
+    // frames are deterministic
+    void setFixedStep(bool fixedStep) {
+        fixedStep_ = fixedStep;
+    }
+
     void tick() {
         // Update current frame count
         auto now = std::chrono::system_clock::now();
         auto deltaTime = std::chrono::duration_cast<std::chrono::microseconds>(now - last_);
-        if (deltaTime.count() >= FRAME_DURATION_MICROS) {
+        if (fixedStep_ || deltaTime.count() >= FRAME_DURATION_MICROS) {
             currentFrame_ += 1;
             last_ = now;
         }
@@ -71,6 +77,7 @@ public:
 private:
    std::chrono::time_point<std::chrono::system_clock> last_; 
    long currentFrame_ = 0;
+   bool fixedStep_ = false;
 
    std::vector<std::unique_ptr<UpdateFunction>> updators_;
    Buffer<uint8_t>& stagingBuffer_;

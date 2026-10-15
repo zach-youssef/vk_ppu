@@ -2,8 +2,11 @@
 CC = /usr/bin/g++
 CXX = $(CC)
 
+# Vulkan wrapper headers (git submodule)
+VK_WRAP = external/vulkan_test/vulkan_test
+
 # Include paths
-CFLAGS = -std=c++20 -Wc++11-extensions -I./include -I/usr/local/include -Wc++14-extensions -DENABLE_PRECOMPILED_HEADERS=OFF -I/Users/zyoussef/code/vulkan_test/vulkan_test -I/Users/zyoussef/stb/ -I/Users/zyoussef/VulkanSDK/1.4.321.0/macOS/include/
+CFLAGS = -std=c++20 -Wc++11-extensions -I./include -I/usr/local/include -Wc++14-extensions -DENABLE_PRECOMPILED_HEADERS=OFF -I$(VK_WRAP) -I/Users/zyoussef/stb/ -I/Users/zyoussef/VulkanSDK/1.4.321.0/macOS/include/
 CXXFLAGS = $(CFLAGS)
 
 # Library paths
@@ -47,8 +50,32 @@ batman/ppu: $(COMMON) $(BATMAN) | $(SHADERS)
 	$(CC) $^ -o $@ $(LDFLAGS) $(LDLIBS)
 	install_name_tool -add_rpath /usr/local/lib ./$@
 
-.PHONY: clean 
+# ---------------------------------------------------------------------------
+# Screenshot tests
+#   make test                - capture each game's frames and compare them with tests/approved
+#   make approve-screenshots - accept the frames captured by the last run
+# ---------------------------------------------------------------------------
+GAMES = smb3 batman
+RECEIVED = $(OUT)/screenshots
+
+$(OUT)/compare_screenshots: tests/compare_screenshots.cpp
+	$(CC) -o $@ $< $(CFLAGS)
+
+test: $(patsubst %,%/ppu,$(GAMES)) $(OUT)/compare_screenshots
+	tests/run_screenshot_tests.sh $(OUT)/compare_screenshots $(RECEIVED) $(GAMES)
+
+approve-screenshots:
+	@for game in $(GAMES); do \
+		mkdir -p tests/approved/$$game; \
+		for image in $(RECEIVED)/$$game/*.png; do \
+			case $$image in *.diff.png) continue;; esac; \
+			cp $$image tests/approved/$$game/ && echo "Approved $$game/$$(basename $$image)"; \
+		done; \
+	done
+
+.PHONY: clean test approve-screenshots
 
 clean:
-	rm -f build/*.o shaders/spirv/*.spirv
+	rm -f build/*.o build/compare_screenshots shaders/spirv/*.spirv
+	rm -rf $(RECEIVED)
 	rm -f smb3/ppu batman/ppu

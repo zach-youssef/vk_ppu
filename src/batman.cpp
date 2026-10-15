@@ -77,7 +77,5 @@ int main(int argc, char** argv) {
                         return updateList;
                     });
 
-    nesSession.run();
-
-    return EXIT_SUCCESS;
+    return nesSession.run(argc, argv);
 }

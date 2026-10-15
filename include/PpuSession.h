@@ -21,6 +21,16 @@ public:
 
     void run();
 
+    // Runs the session, or with `--capture <directory>` captures kCaptureFrames instead
+    int run(int argc, char** argv);
+
+    // Renders kCaptureFrames' last frame, one game frame per rendered frame, writing the PPU's output
+    // at each of kCaptureFrames to <directory>/<frame>.png
+    void capture(const std::string& directory);
+
+    // The game frames captured by capture(), which the screenshot tests compare
+    static inline const std::vector<uint> kCaptureFrames = {1, 2, 3, 4, 8, 16, 60, 120};
+
     void init(const std::string& ppuDumpPath, 
               const std::string& oamDumpPath, 
               Control control,
@@ -28,6 +38,9 @@ public:
               std::function<UpdateList(MemoryUpdateComposer&)> composeUpdates);
 
 private:
+    // The PPU's output image, as RGBA8 bytes
+    std::vector<uint8_t> readFrame();
+
     PpuSessionConfig config_;
     std::unique_ptr<VulkanApp<F>> app_;
 

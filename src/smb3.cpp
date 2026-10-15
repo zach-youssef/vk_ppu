@@ -94,7 +94,5 @@ int main(int argc, char** argv) {
                         return updateList;
                     });
 
-    nesSession.run();
-
-    return 0;
+    return nesSession.run(argc, argv);
 }
