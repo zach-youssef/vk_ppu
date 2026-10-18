@@ -1,73 +1,46 @@
+# Each game is a ZGAL program (<game>/<game>.zgal, importing the PPU in nes/nes.zgal), built with the
+# wrapper's rules (zgal.mk) into build/<game>/<game>, with its memory dumps (<game>/assets) beside it.
+#   make                     - build every game
+#   make test                - capture each game's frames and compare them with tests/approved
+#   make approve-screenshots - accept the frames captured by the last run
+
 # Compiler
 CC = /usr/bin/g++
 CXX = $(CC)
 
-# Vulkan wrapper (git submodule)
-VK_WRAP = external/vulkan_test
+# The Vulkan wrapper and ZGAL (git submodule); ZGAL_ROOT=<path> builds with another checkout
+ZGAL_ROOT ?= external/vulkan_test
+
+CFLAGS = -std=c++20 -I/usr/local/include -I/Users/zyoussef/VulkanSDK/1.4.321.0/macOS/include/
+CXXFLAGS = $(CFLAGS)
+LDFLAGS = -L/opt/homebrew/lib -L/usr/local/lib
+LDLIBS = -lvulkan
 
 OUT = build
-SRC = src
-SHADER_OUT = $(OUT)/shaders
 
-# Include paths
-CFLAGS = -std=c++20 -Wc++11-extensions -I./include -I/usr/local/include -Wc++14-extensions -DENABLE_PRECOMPILED_HEADERS=OFF -I$(VK_WRAP)/include -I$(VK_WRAP)/third_party/stb -I/Users/zyoussef/VulkanSDK/1.4.321.0/macOS/include/
-# Where the memory dumps and compiled shaders are
-CFLAGS += -DPPU_DATA_DIR='"$(abspath .)"' -DPPU_SHADER_DIR='"$(abspath $(SHADER_OUT))"'
-CXXFLAGS = $(CFLAGS)
+include $(ZGAL_ROOT)/zgal.mk
 
-HEADERS = $(wildcard include/*.h) $(shell find $(VK_WRAP)/include -name '*.h')
-
-# Library paths
-LDFLAGS = -L/opt/homebrew/lib  -L/usr/local/lib
-
-# Opencv Libraries
-LDLIBS = -lglfw -lvulkan
-
-# Rule for building Cpp objects
-$(OUT)/%.o : $(SRC)/%.cpp $(HEADERS)
-	@mkdir -p $(OUT)
-	$(CC) -c -o $@ $< $(CFLAGS) $(CLI_FLAGS)
-
-# Rule for building shader SPIR-V, written to $(SHADER_OUT)/<name>.<stage>.spv. Shaders include the
-# wrapper's GLSL (bindless.glsl).
-GLSL_INCLUDES = $(wildcard $(VK_WRAP)/include/glsl/*.glsl)
-$(SHADER_OUT)/%.spv : shaders/% $(GLSL_INCLUDES)
-	@mkdir -p $(SHADER_OUT)
-	glslc -I$(VK_WRAP)/include/glsl --target-env=vulkan1.3 $< -o $@
-
-_COMMON = PpuNodes.o PpuSession.o
-COMMON = $(patsubst %,$(OUT)/%,$(_COMMON))
-
-_SMB3 =  smb3.o
-SMB3 = $(patsubst %,$(OUT)/%,$(_SMB3))
-
-_BATMAN =  batman.o
-BATMAN = $(patsubst %,$(OUT)/%,$(_BATMAN))
-
-_SHADERS = nes.comp draw.frag draw.vert
-SHADERS = $(patsubst %,$(SHADER_OUT)/%.spv,$(_SHADERS))
-
-smb3/ppu: $(COMMON) $(SMB3) | $(SHADERS)
-	$(CC) $^ -o $@ $(LDFLAGS) $(LDLIBS)
-	install_name_tool -add_rpath /usr/local/lib ./$@
-
-batman/ppu: $(COMMON) $(BATMAN) | $(SHADERS)
-	$(CC) $^ -o $@ $(LDFLAGS) $(LDLIBS)
-	install_name_tool -add_rpath /usr/local/lib ./$@
-
-# ---------------------------------------------------------------------------
-# Screenshot tests
-#   make test                - capture each game's frames and compare them with tests/approved
-#   make approve-screenshots - accept the frames captured by the last run
-# ---------------------------------------------------------------------------
 GAMES = smb3 batman
+
+$(foreach game,$(GAMES),$(eval $(call zgal-program,$(game)/$(game).zgal,$(OUT)/$(game),$(game),-lglfw)))
+
+all: $(foreach game,$(GAMES),$(OUT)/$(game)/$(game))
+
+.DEFAULT_GOAL := all
+
+# ---------------------------------------------------------------------------
+# Screenshot tests: each game's frames (CAPTURE_FRAMES, one game frame per frame), headless with
+# validation, compared with tests/approved/<game>/<frame>.png
+# ---------------------------------------------------------------------------
+CAPTURE_FRAMES = 1,2,3,4,8,16,60,120
 RECEIVED = $(OUT)/screenshots
 
 $(OUT)/compare_screenshots: tests/compare_screenshots.cpp
-	$(CC) -o $@ $< $(CFLAGS)
+	@mkdir -p $(dir $@)
+	$(CC) -o $@ $< $(CFLAGS) $(ZGAL_CFLAGS)
 
-test: $(patsubst %,%/ppu,$(GAMES)) $(OUT)/compare_screenshots
-	tests/run_screenshot_tests.sh $(OUT)/compare_screenshots $(RECEIVED) $(GAMES)
+test: all $(OUT)/compare_screenshots
+	tests/run_screenshot_tests.sh $(OUT)/compare_screenshots $(RECEIVED) $(CAPTURE_FRAMES) $(GAMES)
 
 approve-screenshots:
 	@for game in $(GAMES); do \
@@ -78,10 +51,7 @@ approve-screenshots:
 		done; \
 	done
 
-.PHONY: clean test approve-screenshots shaders
-
-shaders: $(SHADERS)
+.PHONY: all clean test approve-screenshots
 
 clean:
 	rm -rf $(OUT)
-	rm -f smb3/ppu batman/ppu

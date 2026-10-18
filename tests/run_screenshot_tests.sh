@@ -1,18 +1,19 @@
 #!/bin/bash
-# Captures each game's frames (see PpuSession::kCaptureFrames) and compares them with the approved
+# Captures each game's frames headless, with validation, and compares them with the approved
 # screenshots in tests/approved/<game>/. Run from the repository root via `make test`.
-#     run_screenshot_tests.sh <compare tool> <received directory> <game>...
+#     run_screenshot_tests.sh <compare tool> <received directory> <frames, e.g. 1,2,60> <game>...
 set -u
 compare=$1
 received_root=$2
-shift 2
+frames=$3
+shift 3
 
 status=0
 for game in "$@"; do
     received="$received_root/$game"
     approved="tests/approved/$game"
     rm -rf "$received"
-    if ! "./$game/ppu" --capture "$received"; then
+    if ! "build/$game/$game" --capture-frames "$frames" --capture "$received" --validation; then
         echo "FAIL $game: capture failed" >&2
         status=1
         continue

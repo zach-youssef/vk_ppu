@@ -1,0 +1,92 @@
+;; Batman's title screen, from an emulator's memory dumps (assets/ppu_dump.bin and
+;; assets/oam_dump.bin), animated: its animated tiles (0xC0 to 0xF8 of the first tile set) come from
+;; eight more dumps in turn (assets/tileframes), and OAM rotates a sprite every frame, so sprites
+;; beyond the 8 a scanline shows take turns (they flicker, as on a NES).
+;;
+;;     batman                                           in a window
+;;     batman --capture-frames 1,2,60 --capture DIR     those frames headless, as DIR/<frame>.png
+
+(import "../nes/nes.zgal")
+
+(define firstAnimatedTile (uint 192))   ; 0xC0
+(define animatedTiles (uint 57))        ; To 0xF8
+
+(define blankTile (Tile (array uint8 0 0 0 0 0 0 0 0) (array uint8 0 0 0 0 0 0 0 0)))
+
+;; Changes the memory each frame, before the PPU renders it: the animated tiles from a dump (blank
+;; before the first), and OAM, rotated
+(compute-material Prepare
+  (workgroup 64)
+  (bindings
+   (memory (buffer PpuMemory))
+   (tileFrames (buffer-array PpuMemory))
+   (oamDump (buffer Oam))
+   (oam (buffer Oam)))
+  (push
+   (tileFrame uint)        ; 0 for none yet, else the dump after tileFrames' tileFrame - 1
+   (rotation uint))        ; Sprite i shows the dump's sprite i - rotation
+  (compute
+   (let* ([i localInvocationId.x])
+     (write! (at oam.sprites i) (at oamDump.sprites (remainder (+ i (- 64 (remainder rotation 64))) 64)))
+     (when (< i animatedTiles)
+       (let* ([tile (+ firstAnimatedTile i)])
+         (write! (at (.tiles (at memory.tileSets 0)) tile)
+                 (if (= tileFrame 0)
+                     blankTile
+                     (at (.tiles (at (.tileSets (at tileFrames (- tileFrame 1))) 0)) tile))))))))
+
+(graph BatmanGraph
+  (parameter headless bool)
+  (parameter capture bool)
+  (input tileFrame (per-frame uint))
+  (input rotation (per-frame uint))
+  ;; The PPU's memory, changed in place each frame
+  (buffer-file memory PpuMemory "ppu_dump.bin")
+  (buffer-file tileFrames PpuMemory
+               "tileframes/0.bin" "tileframes/1.bin" "tileframes/2.bin" "tileframes/3.bin"
+               "tileframes/4.bin" "tileframes/5.bin" "tileframes/6.bin" "tileframes/7.bin")
+  (buffer-file oamDump Oam "oam_dump.bin")
+  (buffer oam Oam 1 #:frames shared)
+  (image picture rgba8 (fixed 256 240) #:frames per-frame)
+  (sampler nearest #:filter nearest)
+  ;; Shown in a window; headless, the capture reads the picture
+  (target screen (surface #:depth none) #:when (not headless))
+
+  (material preparing Prepare memory tileFrames oamDump oam
+            #:push ((tileFrame tileFrame) (rotation rotation))
+            #:invocations (64))
+  (material ppu Ppu memory oam picture
+            #:push ((firstScanline 0) (xScroll 0) (yScroll 0) (tallSprites 1) (backgroundTileset 0)
+                    (spriteTileset 1) (nametableStart 0))
+            #:invocations (256 240))
+  (material showing Show picture (pictureSampler nearest) #:when (not headless))
+
+  (dispatch prepare preparing)
+  (dispatch render ppu)
+  (draw show screen showing 3 #:when (not headless))
+  (readback captured picture #:when capture))
+
+;; The game's clock: a game frame every 60th of a second. The tiles change every 2 game frames,
+;; cycling through the 8 dumps; OAM rotates every game frame.
+(app Batman
+  (state
+   (gameFrame uint 0)
+   (clock float 0.0))
+  (on (frame elapsed)
+    (let* ([clock (+ state.clock elapsed)])
+      (if (< clock gameFrameLength)
+          (with state #:clock clock)
+          ;; At most a game frame each frame drawn
+          (with state #:gameFrame (+ state.gameFrame 1) #:clock (min (- clock gameFrameLength) gameFrameLength)))))
+  (run BatmanGraph
+    (headless headless)
+    (capture capture)
+    (tileFrame (let* ([changes (/ state.gameFrame 2)])
+                 (if (= changes 0) 0 (+ (remainder (- changes 1) 8) 1))))
+    (rotation state.gameFrame)))
+
+(main Batman
+  (about "Batman's title screen on a NES PPU written as a compute shader")
+  (window "batman" 256 240)
+  (timestep #:max 1/30 #:fixed 1/60)
+  (capture captured))

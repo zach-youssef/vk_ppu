@@ -1,0 +1,104 @@
+;; Super Mario Bros. 3's title screen, from an emulator's memory dumps (assets/ppu_dump.bin and
+;; assets/oam_dump.bin), animated as the game would: a background colour cycles, a turtle walks,
+;; and the name tables switch at scanline 192, below the curtain, as the game does at H-blank.
+;;
+;;     smb3                                             in a window
+;;     smb3 --capture-frames 1,2,60 --capture DIR       those frames headless, as DIR/<frame>.png
+
+(import "../nes/nes.zgal")
+
+;; The turtle's sprites, as the game left them in OAM: 2 x 3 sprites of 8 x 16 pixels
+(define turtle
+  (array Sprite
+         (Sprite #xBA #xE9 #x42 #x06) (Sprite #xBA #xE7 #x42 #x0E)
+         (Sprite #xAA #xE5 #x43 #x06) (Sprite #xAA #xE3 #x42 #x0E)
+         (Sprite #x9A #xB1 #x42 #x06) (Sprite #x9A #xE1 #x42 #x0E)))
+;; Its tiles in the other step of its walk
+(define turtleStepTiles (array uint #xEF #xED #xE5 #xEB #xB1 #xE1))
+
+;; Changes the memory each frame, before the PPU renders it: the cycling colour, and the turtle's
+;; sprites at its position and step
+(compute-material Prepare
+  (workgroup 8)
+  (bindings
+   (memory (buffer PpuMemory))
+   (oam (buffer Oam)))
+  (push
+   (cycledColor uint)
+   (turtleX uint)          ; Pixels walked
+   (turtleStep uint))      ; Which step of its walk: 0 or 1
+  (compute
+   (let* ([i localInvocationId.x])
+     (when (= i 0)
+       (write! (at (.colors (at memory.backgroundPalettes 3)) 2) (uint8 cycledColor)))
+     (when (< i 6)
+       (let* ([sprite (at turtle i)])
+         (write! (at oam.sprites i)
+                 (with sprite
+                       #:x (uint8 (+ sprite.x turtleX))
+                       #:tileIndex (uint8 (if (= turtleStep 1) (at turtleStepTiles i) sprite.tileIndex)))))))))
+
+(graph Smb3Graph
+  (parameter headless bool)
+  (parameter capture bool)
+  (input cycledColor (per-frame uint))
+  (input turtleX (per-frame uint))
+  (input turtleStep (per-frame uint))
+  ;; The PPU's memory, changed in place each frame
+  (buffer-file memory PpuMemory "ppu_dump.bin")
+  (buffer-file oam Oam "oam_dump.bin")
+  (image picture rgba8 (fixed 256 240) #:frames per-frame)
+  (sampler nearest #:filter nearest)
+  ;; Shown in a window; headless, the capture reads the picture
+  (target screen (surface #:depth none) #:when (not headless))
+
+  (material preparing Prepare memory oam
+            #:push ((cycledColor cycledColor) (turtleX turtleX) (turtleStep turtleStep))
+            #:invocations (8))
+  (material ppu Ppu memory oam picture
+            #:push ((xScroll 0) (yScroll 0) (tallSprites 1) (backgroundTileset 0) (spriteTileset 1)))
+  (material showing Show picture (pictureSampler nearest) #:when (not headless))
+
+  (dispatch prepare preparing)
+  ;; The name tables change at scanline 192
+  (dispatch top ppu #:push ((firstScanline 0) (nametableStart 0)) #:invocations (256 192))
+  (dispatch bottom ppu #:push ((firstScanline 192) (nametableStart 2)) #:invocations (256 48))
+  (draw show screen showing 3 #:when (not headless))
+  (readback captured picture #:when capture))
+
+;; The game's clock: a game frame every 60th of a second. The colour steps every 4 game frames,
+;; between 0x07 and 0x37, turning at either end; the turtle walks a pixel every 3 and steps every 6.
+(app Smb3
+  (state
+   (gameFrame uint 0)
+   (clock float 0.0)
+   (cycledColor uint #x17)
+   (darkening bool #t))
+  (on (frame elapsed)
+    (let* ([clock (+ state.clock elapsed)])
+      (if (< clock gameFrameLength)
+          (with state #:clock clock)
+          (let* ([frame (+ state.gameFrame 1)]
+                 [cycle (= (remainder frame 4) 0)]
+                 [turning (and cycle (or (= state.cycledColor #x37) (= state.cycledColor #x07)))]
+                 [darkening (if turning (not state.darkening) state.darkening)])
+            (with state
+                  #:gameFrame frame
+                  ;; At most a game frame each frame drawn
+                  #:clock (min (- clock gameFrameLength) gameFrameLength)
+                  #:darkening darkening
+                  #:cycledColor (cond [(not cycle) state.cycledColor]
+                                      [darkening (- state.cycledColor #x10)]
+                                      [else (+ state.cycledColor #x10)]))))))
+  (run Smb3Graph
+    (headless headless)
+    (capture capture)
+    (cycledColor state.cycledColor)
+    (turtleX (/ state.gameFrame 3))
+    (turtleStep (remainder (/ state.gameFrame 6) 2))))
+
+(main Smb3
+  (about "Super Mario Bros. 3's title screen on a NES PPU written as a compute shader")
+  (window "smb3" 256 240)
+  (timestep #:max 1/30 #:fixed 1/60)
+  (capture captured))

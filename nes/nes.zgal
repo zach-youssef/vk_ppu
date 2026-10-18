@@ -1,0 +1,180 @@
+;; The NES's picture processing unit (PPU), as ZGAL shaders that games' programs import. The PPU
+;; renders a frame a scanline at a time from its memory: tile sets (the pattern tables), name tables
+;; of tile indices and their attribute tables (each 16 x 16 pixel area's palette), palettes, and
+;; object attribute memory (OAM) of 64 sprites. The structs match a real NES's memory, so memory
+;; dumps from an emulator load as they are (references: https://www.nesdev.org/).
+;;
+;; One workgroup renders a scanline: each invocation a pixel of it. The registers the PPU reads
+;; (scrolling, which tile sets, the first name table) are push constants, so a game changing them
+;; partway through a frame (as at H-blank) renders the scanlines before and after the change as two
+;; dispatches with different registers.
+
+;; From the standard library: srgbEncode and srgbDecode
+(import color)
+
+;; A tile is 8 x 8 pixels of 2 bits, in two planes of a byte per row: plane0 holds each pixel's low
+;; bit, plane1 its high bit, the leftmost pixel in the highest bit
+(struct Tile
+  (plane0 (array uint8 8))
+  (plane1 (array uint8 8)))
+
+(struct TileSet
+  (tiles (array Tile 256)))
+
+;; 32 x 30 tile indices, then the attribute table: a byte per 32 x 32 pixel area, 2 bits of palette
+;; for each of its 16 x 16 quarters
+(struct NameTable
+  (tileIndices (array uint8 960))
+  (attributeTable (array uint8 64)))
+
+;; Three colours and the background colour, as indices into the NES's colours
+(struct Palette
+  (colors (array uint8 4)))
+
+;; The PPU's 16 KB address space
+(struct PpuMemory
+  (tileSets (array TileSet 2))              ; 0x0000 - 0x1FFF
+  (nameTables (array NameTable 4))          ; 0x2000 - 0x2FFF
+  (padding0 (array uint8 3840))             ; 0x3000 - 0x3EFF
+  (backgroundPalettes (array Palette 4))    ; 0x3F00 - 0x3F1F
+  (spritePalettes (array Palette 4))
+  (padding1 (array uint8 224)))             ; 0x3F20 - 0x3FFF
+
+(struct Sprite
+  (y uint8)
+  (tileIndex uint8)
+  (attr uint8)                              ; Flips (0x80 vertical, 0x40 horizontal), priority, palette
+  (x uint8))
+
+(struct Oam
+  (sprites (array Sprite 64)))
+
+;; The NES's colours, 0xRRGGBB
+(define nesColors
+  (array uint
+         #x7C7C7C #x0000FC #x0000BC #x4428BC #x940084 #xA80020 #xA81000 #x881400
+         #x503000 #x007800 #x006800 #x005800 #x004058 #x000000 #x000000 #x000000
+         #xBCBCBC #x0078F8 #x0058F8 #x6844FC #xD800CC #xE40058 #xF83800 #xE45C10
+         #xAC7C00 #x00B800 #x00A800 #x00A844 #x008888 #x000000 #x000000 #x000000
+         #xF8F8F8 #x3CBCFC #x6888FC #x9878F8 #xF878F8 #xF85898 #xF87858 #xFCA044
+         #xF8B800 #xB8F818 #x58D854 #x58F898 #x00E8D8 #x787878 #x000000 #x000000
+         #xFCFCFC #xA4E4FC #xB8B8F8 #xD8B8F8 #xF8B8F8 #xF8A4C0 #xF0D0B0 #xFCE0A8
+         #xF8D878 #xD8F878 #xB8F8B8 #xB8F8D8 #x00FCFC #xF8D8F8 #x000000 #x000000))
+
+;; The pixel at (x, y) of a tile (each taken modulo 8): an index into a palette, 0 being transparent
+(define (sampleTile [tile : Tile] [x : uint] [y : uint]) : uint
+  (let* ([row (remainder y 8)]
+         [shift (- 7 (remainder x 8))])
+    (bitor (shl (bitand (shr (at tile.plane1 row) shift) 1) 1)
+           (bitand (shr (at tile.plane0 row) shift) 1))))
+
+;; Whether a sprite (height pixels tall) covers scanline y
+(define (onScanline [sprite : Sprite] [y : uint] [height : uint]) : bool
+  (and (>= y sprite.y) (< y (+ sprite.y height))))
+
+;; Renders scanlines: one workgroup a scanline, from firstScanline, into picture (256 x 240), whose
+;; RGBA8 values are sRGB-encoded colours
+(compute-material Ppu
+  (workgroup 256)
+  (bindings
+   (memory (buffer PpuMemory))
+   (oam (buffer Oam))
+   (picture (storage-image)))
+  ;; The registers, as close to the NES's as a dispatch needs: tallSprites is 1 for 8 x 16 sprites
+  (push
+   (firstScanline uint)
+   (xScroll uint)
+   (yScroll uint)
+   (tallSprites uint)
+   (backgroundTileset uint)
+   (spriteTileset uint)
+   (nametableStart uint))
+  ;; The scanline's sprites, chosen from OAM
+  (shared
+   (scanlineSprites (array Sprite 64))
+   (workIndices (array uint 64)))
+  (compute
+   (let* ([x localInvocationId.x]
+          [y (+ globalInvocationId.y firstScanline)]
+          [tall (= tallSprites 1)]
+          [height (if tall (uint 16) (uint 8))])
+     ;; Up to 8 sprites on the scanline: a reduction over OAM, preferring sprites on the scanline,
+     ;; then by index. Sprites' y coordinates are a scanline early, as a real NES evaluates sprites
+     ;; a scanline late (https://www.nesdev.org/wiki/PPU_OAM#Byte_0_-_Y_position).
+     (when (< x 64)
+       (let* ([sprite (at oam.sprites x)])
+         (write! (at scanlineSprites x) (with sprite #:y (uint8 (+ sprite.y 1))))
+         (write! (at workIndices x) x)))
+     (barrier!)
+     (for ([level (range 0 3)])
+       (let* ([stride (shr 32 (uint level))])
+         (when (< x stride)
+           (let* ([first (at scanlineSprites x)]
+                  [second (at scanlineSprites (+ x stride))]
+                  [firstOn (onScanline first y height)]
+                  [keepFirst (if (= firstOn (onScanline second y height))
+                                 (> (at workIndices x) (at workIndices (+ x stride)))
+                                 firstOn)])
+             (unless keepFirst
+               (write! (at scanlineSprites x) second)
+               (write! (at workIndices x) (at workIndices (+ x stride))))))
+         (barrier!)))
+     ;; The background: which name table the scrolled pixel is in, then its tile and palette
+     (let* ([nameTable (remainder (+ nametableStart
+                                     (* (/ (remainder (+ y yScroll) 480) 240) 2)
+                                     (/ (remainder (+ x xScroll) 512) 256))
+                                  4)]
+            [px (remainder x 256)]
+            [py (remainder y 240)]
+            [tileX (/ px 8)]
+            [tileY (/ py 8)]
+            [tileIndex (at (.tileIndices (at memory.nameTables nameTable)) (+ (* tileY 32) tileX))]
+            [attributes (at (.attributeTable (at memory.nameTables nameTable)) (+ (* (/ tileY 4) 8) (/ tileX 4)))]
+            [quarter (+ (* (remainder (/ py 16) 2) 2) (remainder (/ px 16) 2))]
+            [backgroundPalette (bitand (shr attributes (* 2 quarter)) 3)]
+            [backgroundValue (sampleTile (at (.tiles (at memory.tileSets backgroundTileset)) tileIndex) px py)]
+            ;; The sprites, last first, so lower indices are drawn over higher ones
+            [(spriteValue spriteFront spritePalette)
+             (fold ([value (uint 0)] [front #f] [palette (uint 0)]) ([k (range 0 8)])
+               (let* ([sprite (at scanlineSprites (- 7 k))]
+                      [flipY (shr (bitand sprite.attr #x80) 7)]
+                      [set (if tall (bitand sprite.tileIndex 1) spriteTileset)]
+                      [index (+ (bitand sprite.tileIndex (if tall #xFE #xFF))
+                                (if (> (- y sprite.y) 7) (- 1 flipY) flipY))]
+                      [intoX (- x sprite.x)]
+                      [intoY (- y sprite.y)]
+                      [pixel (sampleTile (at (.tiles (at memory.tileSets set)) index)
+                                         (if (not= (bitand sprite.attr #x40) 0) (- 7 intoX) intoX)
+                                         (if (not= (bitand sprite.attr #x80) 0) (- 7 intoY) intoY))]
+                      [covers (and (onScanline sprite y height) (>= x sprite.x) (< x (+ sprite.x 8)))])
+                 (if (and covers (> pixel 0))
+                     (values pixel (= (bitand sprite.attr #x20) 0) (bitand sprite.attr 3))
+                     (values value front palette))))]
+            ;; A sprite in front, or over a transparent background
+            [drawSprite (or (= backgroundValue 0) spriteFront)]
+            [colorIndex (if drawSprite
+                            (at (.colors (at memory.spritePalettes spritePalette)) spriteValue)
+                            (at (.colors (at memory.backgroundPalettes backgroundPalette)) backgroundValue))]
+            ;; The NES ignores a colour index's top two bits
+            [rgb (at nesColors (bitand colorIndex 63))]
+            [color (/ (vec3 (float (shr rgb 16)) (float (bitand (shr rgb 8) 255)) (float (bitand rgb 255))) 255.0)])
+       (store! picture (ivec2 (int px) (int py)) (vec4 (srgbEncode color) 1.0))))))
+
+;; Shows the PPU's picture on the screen, as one triangle covering it. The picture holds sRGB values
+;; and the surface encodes sRGB, so they're decoded first.
+(graphics-material Show
+  (bindings
+   (picture texture)
+   (pictureSampler sampler))
+  (varyings
+   (uv vec2))
+  (outputs
+   (color vec4))
+  (vertex
+   (let* ([corner (vec2 (float (bitand (shl vertexIndex 1) 2)) (float (bitand vertexIndex 2)))])
+     (results #:position (vec4 (- (* corner 2.0) 1.0) 0.0 1.0) #:uv corner)))
+  (fragment
+   (vec4 (srgbDecode (.rgb (sample picture pictureSampler uv))) 1.0)))
+
+;; How long a game frame is: the NES runs at 60 frames a second
+(define gameFrameLength (/ 1.0 60.0))
