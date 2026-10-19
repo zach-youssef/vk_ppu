@@ -1,54 +1,70 @@
+# Each game is a ZGAL program (<game>/<game>.zgal, importing the PPU in nes/nes.zgal), built with the
+# wrapper's rules (zgal.mk) into build/<game>/<game>, with its memory dumps (<game>/assets) beside it.
+#   make                     - build every game
+#   make test                - capture each game's frames and compare them with tests/approved
+#   make approve-screenshots - accept the frames captured by the last run
+#   make web                 - build every game for the web into build/web/<game>: serve it and open
+#                              <game>.zgal.html, or run it headless under Node
+#   make test-web            - capture each game's frames on the web, under Node, and compare them
+#                              with tests/approved
+
 # Compiler
 CC = /usr/bin/g++
 CXX = $(CC)
 
-# Include paths
-CFLAGS = -std=c++20 -Wc++11-extensions -I./include -I/usr/local/include -Wc++14-extensions -DENABLE_PRECOMPILED_HEADERS=OFF -I/Users/zyoussef/code/vulkan_test/vulkan_test -I/Users/zyoussef/stb/ -I/Users/zyoussef/VulkanSDK/1.4.321.0/macOS/include/
+# The Vulkan wrapper and ZGAL (git submodule); ZGAL_ROOT=<path> builds with another checkout
+ZGAL_ROOT ?= external/vulkan_test
+
+CFLAGS = -std=c++20 -I/usr/local/include -I/Users/zyoussef/VulkanSDK/1.4.321.0/macOS/include/
 CXXFLAGS = $(CFLAGS)
-
-# Library paths
-LDFLAGS = -L/opt/homebrew/lib  -L/usr/local/lib
-
-# Opencv Libraries
-LDLIBS = -lglfw -lvulkan
+LDFLAGS = -L/opt/homebrew/lib -L/usr/local/lib
+LDLIBS = -lvulkan
 
 OUT = build
-SRC = src
 
-# Rule for building Cpp objects
-$(OUT)/%.o : $(SRC)/%.cpp
-	$(CC) -c -o $@ $< $(CFLAGS) $(CLI_FLAGS)
+include $(ZGAL_ROOT)/zgal.mk
 
-# Rule for building shader spirv
-shaders/spirv/%.comp.spirv : shaders/%.comp
-	glslc $^ -o $@
-shaders/spirv/%.frag.spirv : shaders/%.frag
-	glslc $^ -o $@
-shaders/spirv/%.vert.spirv : shaders/%.vert
-	glslc $^ -o $@
+GAMES = smb3 batman
 
-_COMMON = PpuComputeNode.o MemoryUpdateComposer.o PpuSession.o
-COMMON = $(patsubst %,$(OUT)/%,$(_COMMON))
+$(foreach game,$(GAMES),$(eval $(call zgal-program,$(game)/$(game).zgal,$(OUT)/$(game),$(game),-lglfw)))
 
-_SMB3 =  smb3.o
-SMB3 = $(patsubst %,$(OUT)/%,$(_SMB3))
+all: $(foreach game,$(GAMES),$(OUT)/$(game)/$(game))
 
-_BATMAN =  batman.o
-BATMAN = $(patsubst %,$(OUT)/%,$(_BATMAN))
+# For the web (WebGPU): the same games, compiled to TypeScript and WGSL and built to JavaScript
+$(foreach game,$(GAMES),$(eval $(call zgal-web-program,$(game)/$(game).zgal,$(OUT)/web/$(game))))
 
-_SHADERS = nes.comp draw.frag draw.vert
-SHADERS = $(patsubst %,shaders/spirv/%.spirv,$(_SHADERS))
+web: $(foreach game,$(GAMES),$(OUT)/web/$(game))
 
-smb3/ppu: $(COMMON) $(SMB3) | $(SHADERS)
-	$(CC) $^ -o $@ $(LDFLAGS) $(LDLIBS)
-	install_name_tool -add_rpath /usr/local/lib ./$@
+.DEFAULT_GOAL := all
 
-batman/ppu: $(COMMON) $(BATMAN) | $(SHADERS)
-	$(CC) $^ -o $@ $(LDFLAGS) $(LDLIBS)
-	install_name_tool -add_rpath /usr/local/lib ./$@
+# ---------------------------------------------------------------------------
+# Screenshot tests: each game's frames (CAPTURE_FRAMES, one game frame per frame), headless with
+# validation, compared with tests/approved/<game>/<frame>.png
+# ---------------------------------------------------------------------------
+CAPTURE_FRAMES = 1,2,3,4,8,16,60,120
+RECEIVED = $(OUT)/screenshots
 
-.PHONY: clean 
+$(OUT)/compare_screenshots: tests/compare_screenshots.cpp
+	@mkdir -p $(dir $@)
+	$(CC) -o $@ $< $(CFLAGS) $(ZGAL_CFLAGS)
+
+test: all $(OUT)/compare_screenshots
+	tests/run_screenshot_tests.sh $(OUT)/compare_screenshots $(RECEIVED) $(CAPTURE_FRAMES) native $(GAMES)
+
+# The web builds' frames, under Node with Dawn, against the same approved screenshots
+test-web: web $(OUT)/compare_screenshots
+	tests/run_screenshot_tests.sh $(OUT)/compare_screenshots $(OUT)/screenshots-web $(CAPTURE_FRAMES) web $(GAMES)
+
+approve-screenshots:
+	@for game in $(GAMES); do \
+		mkdir -p tests/approved/$$game; \
+		for image in $(RECEIVED)/$$game/*.png; do \
+			case $$image in *.diff.png) continue;; esac; \
+			cp $$image tests/approved/$$game/ && echo "Approved $$game/$$(basename $$image)"; \
+		done; \
+	done
+
+.PHONY: all clean test approve-screenshots web test-web
 
 clean:
-	rm -f build/*.o shaders/spirv/*.spirv
-	rm -f smb3/ppu batman/ppu
+	rm -rf $(OUT)
