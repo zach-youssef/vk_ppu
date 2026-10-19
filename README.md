@@ -18,6 +18,15 @@ The games' memory dumps go in `<game>/assets` (they aren't in the repository): `
                                # with tests/approved
     make approve-screenshots   # accepts the last run's frames
 
+The games also run on the web (WebGPU), from TypeScript and WGSL the same ZGAL compiles to. That
+needs Node 24 and npm as well.
+
+    make web                   # builds build/web/smb3 and build/web/batman
+    python3 -m http.server -d build/web/smb3   # then open http://localhost:8000/smb3.zgal.html
+    node build/web/smb3/smb3.zgal.main.js --frames 60 --capture smb3.png   # headless, under Node
+    make test-web              # captures the same frames under Node and compares them with
+                               # tests/approved
+
 # Screnshots
 
 ![screenshot](screenshots/smb3.png)

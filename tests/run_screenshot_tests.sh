@@ -1,19 +1,26 @@
 #!/bin/bash
 # Captures each game's frames headless, with validation, and compares them with the approved
-# screenshots in tests/approved/<game>/. Run from the repository root via `make test`.
-#     run_screenshot_tests.sh <compare tool> <received directory> <frames, e.g. 1,2,60> <game>...
+# screenshots in tests/approved/<game>/. Run from the repository root via `make test` (native, the
+# programs in build/<game>) or `make test-web` (web, the programs in build/web/<game>, under Node).
+#     run_screenshot_tests.sh <compare tool> <received directory> <frames, e.g. 1,2,60> native|web <game>...
 set -u
 compare=$1
 received_root=$2
 frames=$3
-shift 3
+kind=$4
+shift 4
 
 status=0
 for game in "$@"; do
     received="$received_root/$game"
     approved="tests/approved/$game"
     rm -rf "$received"
-    if ! "build/$game/$game" --capture-frames "$frames" --capture "$received" --validation; then
+    if [ "$kind" = web ]; then
+        program=(node "build/web/$game/$game.zgal.main.js")
+    else
+        program=("build/$game/$game")
+    fi
+    if ! "${program[@]}" --capture-frames "$frames" --capture "$received" --validation; then
         echo "FAIL $game: capture failed" >&2
         status=1
         continue

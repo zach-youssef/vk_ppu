@@ -3,6 +3,10 @@
 #   make                     - build every game
 #   make test                - capture each game's frames and compare them with tests/approved
 #   make approve-screenshots - accept the frames captured by the last run
+#   make web                 - build every game for the web into build/web/<game>: serve it and open
+#                              <game>.zgal.html, or run it headless under Node
+#   make test-web            - capture each game's frames on the web, under Node, and compare them
+#                              with tests/approved
 
 # Compiler
 CC = /usr/bin/g++
@@ -26,6 +30,11 @@ $(foreach game,$(GAMES),$(eval $(call zgal-program,$(game)/$(game).zgal,$(OUT)/$
 
 all: $(foreach game,$(GAMES),$(OUT)/$(game)/$(game))
 
+# For the web (WebGPU): the same games, compiled to TypeScript and WGSL and built to JavaScript
+$(foreach game,$(GAMES),$(eval $(call zgal-web-program,$(game)/$(game).zgal,$(OUT)/web/$(game))))
+
+web: $(foreach game,$(GAMES),$(OUT)/web/$(game))
+
 .DEFAULT_GOAL := all
 
 # ---------------------------------------------------------------------------
@@ -40,7 +49,11 @@ $(OUT)/compare_screenshots: tests/compare_screenshots.cpp
 	$(CC) -o $@ $< $(CFLAGS) $(ZGAL_CFLAGS)
 
 test: all $(OUT)/compare_screenshots
-	tests/run_screenshot_tests.sh $(OUT)/compare_screenshots $(RECEIVED) $(CAPTURE_FRAMES) $(GAMES)
+	tests/run_screenshot_tests.sh $(OUT)/compare_screenshots $(RECEIVED) $(CAPTURE_FRAMES) native $(GAMES)
+
+# The web builds' frames, under Node with Dawn, against the same approved screenshots
+test-web: web $(OUT)/compare_screenshots
+	tests/run_screenshot_tests.sh $(OUT)/compare_screenshots $(OUT)/screenshots-web $(CAPTURE_FRAMES) web $(GAMES)
 
 approve-screenshots:
 	@for game in $(GAMES); do \
@@ -51,7 +64,7 @@ approve-screenshots:
 		done; \
 	done
 
-.PHONY: all clean test approve-screenshots
+.PHONY: all clean test approve-screenshots web test-web
 
 clean:
 	rm -rf $(OUT)
