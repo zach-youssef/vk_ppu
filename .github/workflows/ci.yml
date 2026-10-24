@@ -1,0 +1,62 @@
+# On every push to a branch: lists the commits it brings (the wrapper's commits action) and checks
+# each one, each check posting a commit status on its own commit.
+name: ci
+on:
+  push:
+    branches: ["**"]
+
+# A newer push to a working branch supersedes its running checks. Every run on the default branch
+# finishes: each has its own group, since a group holds only one pending run and drops the others.
+concurrency:
+  group: ci-${{ github.ref }}${{ github.ref_name == github.event.repository.default_branch && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  commits:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      commits: ${{ steps.commits.outputs.commits }}
+      wrapper-repository: ${{ steps.wrapper.outputs.repository }}
+      wrapper-sha: ${{ steps.wrapper.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The submodule's URL is ssh, which the runner has no key for: it's fetched over https. The
+      # pushed commit's pin and the wrapper's repository (owner/name, from .gitmodules) give every
+      # commit's check the same actions.
+      - id: wrapper
+        name: Check out the wrapper
+        run: |
+          git config --global url."https://github.com/".insteadOf git@github.com:
+          git submodule update --init --recursive
+          url=$(git config -f .gitmodules submodule.external/vulkan_test.url)
+          repository=${url#git@github.com:}
+          repository=${repository#https://github.com/}
+          echo "repository=${repository%.git}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD:external/vulkan_test)" >> "$GITHUB_OUTPUT"
+
+      - id: commits
+        uses: ./external/vulkan_test/.github/actions/commits
+
+  test:
+    needs: commits
+    # Each commit's job posts its status
+    permissions:
+      contents: read
+      statuses: write
+    uses: ./.github/workflows/test.yml
+    with:
+      commits: ${{ needs.commits.outputs.commits }}
+      wrapper-repository: ${{ needs.commits.outputs.wrapper-repository }}
+      wrapper-sha: ${{ needs.commits.outputs.wrapper-sha }}

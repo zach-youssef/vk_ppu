@@ -1,0 +1,60 @@
+# Weekly, or by hand: builds and tests the default branch against the wrapper's newest commit (its
+# default branch) instead of the pinned one, catching breakage before the pin is bumped. No required
+# check or commit status depends on it.
+name: canary
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  canary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Over https: the submodule's URL is ssh, which the runner has no key for
+      - name: Check out the wrapper's newest commit
+        run: |
+          git config --global url."https://github.com/".insteadOf git@github.com:
+          git submodule update --init --recursive
+          git -C external/vulkan_test fetch --quiet origin HEAD
+          git -C external/vulkan_test checkout --quiet FETCH_HEAD
+          echo "Pinned: $(git rev-parse HEAD:external/vulkan_test)"
+          echo "Testing: $(git -C external/vulkan_test log -1 --format='%H %s')"
+
+      - uses: ./external/vulkan_test/.github/actions/setup-zgal
+        with:
+          toolchain: native
+          npm-lockfile: external/vulkan_test/web/package-lock.json
+
+      - name: Build
+        id: build
+        run: make -j"$(nproc)" all web build/compare_screenshots
+
+      - name: Screenshot tests (native, lavapipe)
+        run: make test
+
+      - name: Screenshot tests (web, Dawn on lavapipe)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: make test-web
+
+      - name: Upload the screenshots
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: screenshots
+          path: |
+            build/screenshots
+            build/screenshots-web
+          if-no-files-found: ignore

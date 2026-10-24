@@ -1,0 +1,112 @@
+# Builds each commit's games, native and for the web, and runs their screenshot tests: `make test`
+# natively on lavapipe with validation, and `make test-web` under Node with Dawn (on lavapipe).
+# Each commit's job posts a "test" commit status on it.
+name: test
+on:
+  workflow_call:
+    inputs:
+      commits:
+        description: A JSON array of the commit SHAs to check.
+        required: true
+        type: string
+      wrapper-repository:
+        description: The wrapper's repository (owner/name), whose actions set up the runner.
+        required: true
+        type: string
+      wrapper-sha:
+        description: The wrapper's commit whose actions set up the runner (the pushed commit's pin).
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: test ${{ matrix.sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      statuses: write
+    strategy:
+      fail-fast: false
+      matrix:
+        sha: ${{ fromJSON(inputs.commits) }}
+    env:
+      STATUS_URL: repos/${{ github.repository }}/statuses/${{ matrix.sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Mark the commit's check pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "$STATUS_URL" -f state=pending -f context=test -f target_url="$RUN_URL" -f description="Building and testing" > /dev/null
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.sha }}
+          persist-credentials: false
+
+      # Over https: the submodule's URL is ssh, which the runner has no key for
+      - name: Check out the wrapper
+        run: |
+          git config --global url."https://github.com/".insteadOf git@github.com:
+          git submodule update --init --recursive
+
+      # The actions come from the wrapper the pushed commit pins, not the checked-out commit's, so
+      # every commit is checked with the same setup (older commits pin wrappers without them)
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.wrapper-repository }}
+          ref: ${{ inputs.wrapper-sha }}
+          path: .ci
+          sparse-checkout: .github
+          persist-credentials: false
+
+      - uses: ./.ci/.github/actions/setup-zgal
+        with:
+          toolchain: native
+          npm-lockfile: external/vulkan_test/web/package-lock.json
+
+      - name: Build
+        id: build
+        run: make -j"$(nproc)" all web build/compare_screenshots
+
+      - name: Screenshot tests (native, lavapipe)
+        run: make test
+
+      - name: Screenshot tests (web, Dawn on lavapipe)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: make test-web
+
+      # The captured frames, and the differences from the approved ones, for a failure's review
+      - name: Upload the screenshots
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: screenshots-${{ matrix.sha }}
+          path: |
+            build/screenshots
+            build/screenshots-web
+          if-no-files-found: ignore
+
+      - name: ccache statistics
+        if: always()
+        run: ccache -s
+
+      - name: Post the commit's status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          case "$JOB_STATUS" in
+            success) state=success description="Built and tested" ;;
+            failure) state=failure description="Failed" ;;
+            *) state=error description="Cancelled or timed out" ;;
+          esac
+          gh api "$STATUS_URL" -f state=$state -f context=test -f target_url="$RUN_URL" -f description="$description" > /dev/null

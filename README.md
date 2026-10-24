@@ -10,7 +10,7 @@ Everything is written in ZGAL, the shader and render graph language of my [Vulka
 
 # Building and running
 
-The games' memory dumps go in `<game>/assets` (they aren't in the repository): `ppu_dump.bin` and `oam_dump.bin`, and Batman's animated tiles in `batman/assets/tileframes/0.bin` to `7.bin`. Building needs what the wrapper does (the Vulkan SDK, `glslc`, GLFW, GLM and Racket 8).
+The games' memory dumps, taken from an emulator, are in `<game>/assets`: `ppu_dump.bin` and `oam_dump.bin`, and Batman's animated tiles in `batman/assets/tileframes/0.bin` to `7.bin`. Building needs what the wrapper does (the Vulkan SDK, `glslc`, GLFW, GLM and Racket 8).
 
     make                       # builds build/smb3/smb3 and build/batman/batman
     build/smb3/smb3            # in a window (--help for the options)
@@ -26,6 +26,21 @@ needs Node 24 and npm as well.
     node build/web/smb3/smb3.zgal.main.js --frames 60 --capture smb3.png   # headless, under Node
     make test-web              # captures the same frames under Node and compares them with
                                # tests/approved
+
+# CI
+
+GitHub Actions (`.github/workflows/ci.yml`) checks every pushed commit, not only the tip: the commits
+a working branch has beyond `main`, or those a push to `main` brings (at most the newest 20). Each
+one is built on Ubuntu 24.04 with clang++, then runs `make test` (natively, on lavapipe, Mesa's
+software Vulkan driver, with validation) and `make test-web` (under Node with Dawn, also on
+lavapipe), and gets a `test` commit status. The runner's setup and the commit listing are the
+wrapper's actions (`external/vulkan_test/.github/actions`), taken from the wrapper the pushed commit
+pins, so every commit is checked with the same setup. A failing check uploads its captured frames
+and their differences as an artifact.
+
+CI tests the pinned wrapper. A canary (`.github/workflows/canary.yml`, weekly or by hand with
+`gh workflow run canary.yml`) runs the same tests on `main` against the wrapper's newest commit,
+to catch breakage before the pin is bumped; nothing depends on it.
 
 # Screnshots
 
