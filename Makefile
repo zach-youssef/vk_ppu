@@ -8,16 +8,21 @@
 #   make test-web            - capture each game's frames on the web, under Node, and compare them
 #                              with tests/approved
 
-# Compiler
-CC = /usr/bin/g++
-CXX = $(CC)
+# Compiler: clang, the one the wrapper is tested with (Apple's c++ on macOS, clang++ on Linux),
+# unless CXX is given in the environment or on the command line (make CXX=g++). make's built-in
+# default, or none under make -R, counts as not given.
+ifneq ($(filter default undefined,$(origin CXX)),)
+CXX = $(if $(filter Darwin,$(ZGAL_OS)),c++,clang++)
+endif
 
 # The Vulkan wrapper and ZGAL (git submodule); ZGAL_ROOT=<path> builds with another checkout
 ZGAL_ROOT ?= external/vulkan_test
 
-CFLAGS = -std=c++20 -I/usr/local/include -I/Users/zyoussef/VulkanSDK/1.4.321.0/macOS/include/
+# The platform's include and library paths (the Vulkan SDK's, GLFW's, GLM's) come from zgal.mk's
+# ZGAL_CFLAGS and ZGAL_LDFLAGS
+CFLAGS = -std=c++20
 CXXFLAGS = $(CFLAGS)
-LDFLAGS = -L/opt/homebrew/lib -L/usr/local/lib
+LDFLAGS =
 LDLIBS = -lvulkan
 
 OUT = build
@@ -46,7 +51,7 @@ RECEIVED = $(OUT)/screenshots
 
 $(OUT)/compare_screenshots: tests/compare_screenshots.cpp
 	@mkdir -p $(dir $@)
-	$(CC) -o $@ $< $(CFLAGS) $(ZGAL_CFLAGS)
+	$(CXX) -o $@ $< $(CFLAGS) $(ZGAL_CFLAGS)
 
 test: all $(OUT)/compare_screenshots
 	tests/run_screenshot_tests.sh $(OUT)/compare_screenshots $(RECEIVED) $(CAPTURE_FRAMES) native $(GAMES)
