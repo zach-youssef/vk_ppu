@@ -38,6 +38,14 @@ wrapper's actions (`external/vulkan_test/.github/actions`), taken from the wrapp
 pins, so every commit is checked with the same setup. A failing check uploads its captured frames
 and their differences as an artifact.
 
+The test jobs build and run the commits' code, so they get a read-only token and no checkout
+persists its credentials (a build could plant a program that a later step runs with a token).
+Two jobs that check nothing out post the statuses instead: `pending` marks each commit's `test`
+check pending, and `statuses`, after every test job, posts each commit's outcome from its job's
+conclusion in the run's jobs API (matched by the name `test / test <sha>`), linked to that job.
+Success and failure post as they are; a cancelled, timed-out, missing or unreadable job posts
+`error`, so no commit stays pending.
+
 CI tests the pinned wrapper. A canary (`.github/workflows/canary.yml`, weekly or by hand with
 `gh workflow run canary.yml`) runs the same tests on `main` against the wrapper's newest commit,
 to catch breakage before the pin is bumped; nothing depends on it.
