@@ -1,0 +1,31 @@
+;; What every system's PPU shares, imported by each system's file (nes/nes.zgal, ...): how a
+;; picture's pixels are stored, showing a picture on the screen, and the game frame's length. Each
+;; system's memory, registers and rendering are its own.
+
+;; From the standard library: srgbEncode and srgbDecode
+(import color)
+
+;; A picture pixel's value (RGBA8 storage images hold sRGB-encoded colours) for a colour. The colour
+;; is linear: it's sRGB-encoded here. A palette or emulator colour (already sRGB) must be srgbDecoded
+;; first, or it's encoded twice (the NES does this, see nes/README.md).
+(define (pictureColor [color : vec3]) : vec4
+  (vec4 (srgbEncode color) 1.0))
+
+;; Shows a PPU's picture on the screen, as one triangle covering it. The picture holds sRGB values
+;; and the surface encodes sRGB, so they're decoded first.
+(graphics-material Show
+  (bindings
+   (picture texture)
+   (pictureSampler sampler))
+  (varyings
+   (uv vec2))
+  (outputs
+   (color vec4))
+  (vertex
+   (let* ([corner (vec2 (float (bitand (shl vertexIndex 1) 2)) (float (bitand vertexIndex 2)))])
+     (results #:position (vec4 (- (* corner 2.0) 1.0) 0.0 1.0) #:uv corner)))
+  (fragment
+   (vec4 (srgbDecode (.rgb (sample picture pictureSampler uv))) 1.0)))
+
+;; How long a game frame is: the systems run at 60 frames a second (NTSC)
+(define gameFrameLength (/ 1.0 60.0))

@@ -9,8 +9,8 @@
 ;; partway through a frame (as at H-blank) renders the scanlines before and after the change as two
 ;; dispatches with different registers.
 
-;; From the standard library: srgbEncode and srgbDecode
-(import color)
+;; What every system's PPU shares: pictureColor, Show and gameFrameLength
+(import "../common/ppu.zgal")
 
 ;; A tile is 8 x 8 pixels of 2 bits, in two planes of a byte per row: plane0 holds each pixel's low
 ;; bit, plane1 its high bit, the leftmost pixel in the highest bit
@@ -49,7 +49,8 @@
 (struct Oam
   (sprites (array Sprite 64)))
 
-;; The NES's colours, 0xRRGGBB
+;; The NES's colours, 0xRRGGBB (sRGB; pictureColor takes linear colours and encodes them again, so
+;; the pictures are brighter than the emulator's, see nes/README.md)
 (define nesColors
   (array uint
          #x7C7C7C #x0000FC #x0000BC #x4428BC #x940084 #xA80020 #xA81000 #x881400
@@ -158,23 +159,4 @@
             ;; The NES ignores a colour index's top two bits
             [rgb (at nesColors (bitand colorIndex 63))]
             [color (/ (vec3 (float (shr rgb 16)) (float (bitand (shr rgb 8) 255)) (float (bitand rgb 255))) 255.0)])
-       (store! picture (ivec2 (int px) (int py)) (vec4 (srgbEncode color) 1.0))))))
-
-;; Shows the PPU's picture on the screen, as one triangle covering it. The picture holds sRGB values
-;; and the surface encodes sRGB, so they're decoded first.
-(graphics-material Show
-  (bindings
-   (picture texture)
-   (pictureSampler sampler))
-  (varyings
-   (uv vec2))
-  (outputs
-   (color vec4))
-  (vertex
-   (let* ([corner (vec2 (float (bitand (shl vertexIndex 1) 2)) (float (bitand vertexIndex 2)))])
-     (results #:position (vec4 (- (* corner 2.0) 1.0) 0.0 1.0) #:uv corner)))
-  (fragment
-   (vec4 (srgbDecode (.rgb (sample picture pictureSampler uv))) 1.0)))
-
-;; How long a game frame is: the NES runs at 60 frames a second
-(define gameFrameLength (/ 1.0 60.0))
+       (store! picture (ivec2 (int px) (int py)) (pictureColor color))))))

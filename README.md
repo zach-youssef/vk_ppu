@@ -6,7 +6,7 @@ I wrote a compute shader that approximates how the NES PPU would render a single
 
 To support advanced functionality like changing registers partway through a frame (as is done in the title screen of Super Mario Bros 3, which switches name tables at scanline 192), the scanlines before and after a change are rendered by separate dispatches, each with its own registers. Animations (palette cycling, metasprites, animated tiles, OAM cycling) are each game's state, advanced every game frame and written into the PPU's memory before the frame renders (as during 'V-Blank').
 
-Everything is written in ZGAL, the shader and render graph language of my [Vulkan Wrapper](https://github.com/zach-youssef/vulkan_testing/tree/zgal) (a submodule in `external/vulkan_test`): the PPU (`nes/nes.zgal`) and each game's program (`smb3/smb3.zgal`, `batman/batman.zgal`), whose C++ and shaders the build generates. There's no C++ of its own.
+Everything is written in ZGAL, the shader and render graph language of my [Vulkan Wrapper](https://github.com/zach-youssef/vulkan_testing/tree/zgal) (a submodule in `external/vulkan_test`): the PPU (`nes/nes.zgal`, importing what every system's PPU shares from `common/ppu.zgal`) and each game's program (`smb3/smb3.zgal`, `batman/batman.zgal`), whose C++ and shaders the build generates. There's no C++ of its own.
 
 # Building and running
 
