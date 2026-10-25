@@ -1,6 +1,5 @@
 .vscode/
 build/
 *.bin
-# The games' memory dumps, dumped from an emulator, which they render
-!/smb3/assets/**/*.bin
-!/batman/assets/**/*.bin
+# Every game's memory dumps (<game>/assets), dumped from an emulator, which it renders
+!/*/assets/**/*.bin

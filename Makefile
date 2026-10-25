@@ -1,5 +1,6 @@
-# Each game is a ZGAL program (<game>/<game>.zgal, importing the PPU in nes/nes.zgal), built with the
-# wrapper's rules (zgal.mk) into build/<game>/<game>, with its memory dumps (<game>/assets) beside it.
+# Each game is a ZGAL program (<game>/<game>.zgal, importing its system's PPU, e.g. nes/nes.zgal),
+# built with the wrapper's rules (zgal.mk) into build/<game>/<game>, with its memory dumps
+# (<game>/assets) beside it.
 #   make                     - build every game
 #   make test                - capture each game's frames and compare them with tests/approved
 #   make approve-screenshots - accept the frames captured by the last run
@@ -30,7 +31,9 @@ OUT = build
 
 include $(ZGAL_ROOT)/zgal.mk
 
-GAMES = smb3 batman
+# The games: each system lists its own in <system>/games.mk (GAMES += ...)
+GAMES :=
+include $(sort $(wildcard */games.mk))
 
 $(foreach game,$(GAMES),$(eval $(call zgal-program,$(game)/$(game).zgal,$(OUT)/$(game),$(game),-lglfw)))
 

@@ -10,13 +10,14 @@ Everything is written in ZGAL, the shader and render graph language of my [Vulka
 
 # Building and running
 
-The games' memory dumps, taken from an emulator, are in `<game>/assets`: `ppu_dump.bin` and `oam_dump.bin`, and Batman's animated tiles in `batman/assets/tileframes/0.bin` to `7.bin`. Building needs what the wrapper does (the Vulkan SDK, `glslc`, GLFW, GLM and Racket 8).
+The games' memory dumps, taken from an emulator, are in `<game>/assets`: `ppu_dump.bin` and `oam_dump.bin`, and Batman's animated tiles in `batman/assets/tileframes/0.bin` to `7.bin`. Each system lists its games in `<system>/games.mk` (`GAMES += ...`), which the Makefile includes, and a new game's dumps in `<game>/assets` are committed like these (`.gitignore` ignores other `.bin` files). Building needs what the wrapper does (the Vulkan SDK, `glslc`, GLFW, GLM and Racket 8).
 
     make                       # builds build/smb3/smb3 and build/batman/batman
     build/smb3/smb3            # in a window (--help for the options)
     make test                  # captures frames 1 to 120 headless, with validation (incl. sync),
                                # and compares them with tests/approved
     make approve-screenshots   # accepts the last run's frames
+    make test-tools            # tests the dump tools (tools/dump, Racket)
 
 The games also run on the web (WebGPU), from TypeScript and WGSL the same ZGAL compiles to. That
 needs Node 24 and npm as well.
