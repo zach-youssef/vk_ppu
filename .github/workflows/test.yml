@@ -1,5 +1,6 @@
 # Builds each commit's games, native and for the web, and runs their screenshot tests: `make test`
-# natively on lavapipe with validation, and `make test-web` under Node with Dawn (on lavapipe).
+# natively on lavapipe with validation (including synchronization validation), and `make test-web`
+# under Node with Dawn (on lavapipe).
 # Each commit's job runs with a read-only token: ci.yml's pending and statuses jobs post its "test"
 # commit status from the job's conclusion (the job is named "test <sha>").
 name: test

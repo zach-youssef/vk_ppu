@@ -14,8 +14,8 @@ The games' memory dumps, taken from an emulator, are in `<game>/assets`: `ppu_du
 
     make                       # builds build/smb3/smb3 and build/batman/batman
     build/smb3/smb3            # in a window (--help for the options)
-    make test                  # captures frames 1 to 120 headless, with validation, and compares them
-                               # with tests/approved
+    make test                  # captures frames 1 to 120 headless, with validation (incl. sync),
+                               # and compares them with tests/approved
     make approve-screenshots   # accepts the last run's frames
 
 The games also run on the web (WebGPU), from TypeScript and WGSL the same ZGAL compiles to. That
@@ -29,14 +29,14 @@ needs Node 24 and npm as well.
 
 # CI
 
-GitHub Actions (`.github/workflows/ci.yml`) checks every pushed commit, not only the tip: the commits
-a working branch has beyond `main`, or those a push to `main` brings (at most the newest 20). Each
-one is built on Ubuntu 24.04 with clang++, then runs `make test` (natively, on lavapipe, Mesa's
-software Vulkan driver, with validation) and `make test-web` (under Node with Dawn, also on
-lavapipe), and gets a `test` commit status. The runner's setup and the commit listing are the
-wrapper's actions (`external/vulkan_test/.github/actions`), taken from the wrapper the pushed commit
-pins, so every commit is checked with the same setup. A failing check uploads its captured frames
-and their differences as an artifact.
+GitHub Actions (`.github/workflows/ci.yml`) checks every pushed commit, not only the tip: the
+commits a working branch has beyond `main`, or those a push to `main` brings (at most the newest
+20). Each one is built on Ubuntu 24.04 with clang++, then runs `make test` (natively, on lavapipe,
+Mesa's software Vulkan driver, with validation including synchronization validation) and `make
+test-web` (under Node with Dawn, also on lavapipe), and gets a `test` commit status. The runner's
+setup and the commit listing are the wrapper's actions (`external/vulkan_test/.github/actions`),
+taken from the wrapper the pushed commit pins, so every commit is checked with the same setup. A
+failing check uploads its captured frames and their differences as an artifact.
 
 The test jobs build and run the commits' code, so they get a read-only token and no checkout
 persists its credentials (a build could plant a program that a later step runs with a token).
