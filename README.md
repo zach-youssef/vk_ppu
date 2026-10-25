@@ -2,15 +2,19 @@
 
 Implemention of retro picture processing units (just NES for now) implemented as Vulkan compute pipelines.
 
-I wrote a compute shader that approximates how the NES PPU would render a single scanline and use this to render real NES memory dumps from an emulator.
+Everything is written in ZGAL, the shader and render graph language of my [Vulkan Wrapper](https://github.com/zach-youssef/vulkan_testing/tree/zgal) (a submodule in `external/vulkan_test`): each system's PPU and each game's program (`<game>/<game>.zgal`), whose C++ and shaders the build generates. There's no C++ of its own.
 
-To support advanced functionality like changing registers partway through a frame (as is done in the title screen of Super Mario Bros 3, which switches name tables at scanline 192), the scanlines before and after a change are rendered by separate dispatches, each with its own registers. Animations (palette cycling, metasprites, animated tiles, OAM cycling) are each game's state, advanced every game frame and written into the PPU's memory before the frame renders (as during 'V-Blank').
+# Systems
 
-Everything is written in ZGAL, the shader and render graph language of my [Vulkan Wrapper](https://github.com/zach-youssef/vulkan_testing/tree/zgal) (a submodule in `external/vulkan_test`): the PPU (`nes/nes.zgal`, importing what every system's PPU shares from `common/ppu.zgal`) and each game's program (`smb3/smb3.zgal`, `batman/batman.zgal`), whose C++ and shaders the build generates. There's no C++ of its own.
+Each system's PPU is its own (`<system>/<system>.zgal`), with a README of how it works and what it
+supports. They import what they share from `common/ppu.zgal`: showing the picture on the screen
+(`Show`), storing a colour into the picture (`pictureColor`) and the game frame's length.
+
+- [NES](nes/README.md): `smb3`, `batman`
 
 # Building and running
 
-The games' memory dumps, taken from an emulator, are in `<game>/assets`: `ppu_dump.bin` and `oam_dump.bin`, and Batman's animated tiles in `batman/assets/tileframes/0.bin` to `7.bin`. Each system lists its games in `<system>/games.mk` (`GAMES += ...`), which the Makefile includes, and a new game's dumps in `<game>/assets` are committed like these (`.gitignore` ignores other `.bin` files). Building needs what the wrapper does (the Vulkan SDK, `glslc`, GLFW, GLM and Racket 8).
+The games' memory dumps, taken from an emulator, are in `<game>/assets` (each system's README lists its files). Each system lists its games in `<system>/games.mk` (`GAMES += ...`), which the Makefile includes, and a new game's dumps in `<game>/assets` are committed like these (`.gitignore` ignores other `.bin` files). Building needs what the wrapper does (the Vulkan SDK, `glslc`, GLFW, GLM and Racket 8).
 
     make                       # builds build/smb3/smb3 and build/batman/batman
     build/smb3/smb3            # in a window (--help for the options)
