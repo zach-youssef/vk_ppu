@@ -7,6 +7,7 @@
 #                              <game>.zgal.html, or run it headless under Node
 #   make test-web            - capture each game's frames on the web, under Node, and compare them
 #                              with tests/approved
+#   make test-tools          - test the dump tools (tools/dump, Racket; separate from make test)
 
 # Compiler: clang, the one the wrapper is tested with (Apple's c++ on macOS, clang++ on Linux),
 # unless CXX is given in the environment or on the command line (make CXX=g++). make's built-in
@@ -69,7 +70,11 @@ approve-screenshots:
 		done; \
 	done
 
-.PHONY: all clean test approve-screenshots web test-web
+# The dump tools' tests, which need only Racket (see tools/dump/genesis.md)
+test-tools:
+	raco test tools/dump
+
+.PHONY: all clean test approve-screenshots web test-web test-tools
 
 clean:
 	rm -rf $(OUT)
