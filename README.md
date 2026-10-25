@@ -38,6 +38,9 @@ setup and the commit listing are the wrapper's actions (`external/vulkan_test/.g
 taken from the wrapper the pushed commit pins, so every commit is checked with the same setup. A
 failing check uploads its captured frames and their differences as an artifact.
 
+The setup caches the Vulkan SDK, ccache and npm's downloads. GitHub scopes caches per branch: a
+branch restores only its own caches or the default branch's, and what it saves never reaches `main`.
+
 The test jobs build and run the commits' code, so they get a read-only token and no checkout
 persists its credentials (a build could plant a program that a later step runs with a token).
 Two jobs that check nothing out post the statuses instead: `pending` marks each commit's `test`
