@@ -72,7 +72,9 @@ Every multi-byte value is little-endian. Memory is dumped as it was at the start
 first displayed line (on SNES, the first line out of forced blank), so it includes whatever the
 game uploads during vertical blank or forced blank. If it changes later in the displayed lines
 (up to the start of vertical blank, so the game's uploads for the next frame don't count),
-`info.txt` gets a warning. If no line is displayed, memory is dumped as of the frame's end, also
+`info.txt` gets a warning. On SNES that includes uploads in forced blank after the last displayed
+line: those lines are already drawn, so the dump is right, but the warning still appears. If no
+line is displayed, memory is dumped as of the frame's end, also
 with a warning. The register rows show the state each line was drawn with.
 
 `info.txt` has one `key=value` per line: `console` (`SNES` or `PC Engine`), `frame` (Mesen's
@@ -179,3 +181,32 @@ VDC is dumped.
   frame's size, such as NTSC, makes the dump fail. Mesen's overscan cropping doesn't affect it.
 - Mesen fills VRAM and palette memory with random values at power-on. A game that doesn't clear
   them leaves noise in the dump's unused areas.
+
+### Checking the script
+
+```sh
+MESEN=/path/to/Mesen tools/dump/test/check.sh [work-dir]
+```
+
+This needs [cc65](https://cc65.github.io) (`ca65`, `ld65`) and Python 3. It assembles the two
+test ROMs in `test/` (`snes-test.s` and `pce-test.s`, written for this check and free to
+redistribute), dumps frame 10 of each (and SNES frame 1), and checks the dumps against what the
+ROMs write (`test/check.py`):
+
+- Every register field, each set to a distinctive value, and the rows where they change
+  (HDMA, raster and V-IRQ writes, forced blank at the top of the SNES screen).
+- A frame counter that scrolls the picture and is written to VRAM and palette memory late in
+  vertical blank (and on SNES, in forced blank). The screenshot, the register rows and the
+  memory must all show the same frame, which catches a stale screenshot from frame skipping and
+  a memory snapshot taken before the game's uploads.
+- The memory-changed warning, from a VRAM write during the PC Engine frame, and its absence for
+  an upload early in vertical blank, before Mesen's frame ends (the test ROM's display ends at
+  scanline 251, Mesen's frame at 256).
+- The no-displayed-line warning, from SNES frame 1, which is in forced blank throughout.
+- The screenshot's edges against the rows' scroll values, horizontally and vertically.
+
+It also checks that a failed dump makes Mesen exit with 1, both when the script loads and from
+a callback during emulation.
+
+The check doesn't run in CI yet. The plan is a separate CI job that uses Mesen's Linux x64
+build (which has the same `--testrunner`) and cc65 from apt.
