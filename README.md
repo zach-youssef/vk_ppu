@@ -14,7 +14,7 @@ supports. They import what they share from `common/ppu.zgal`: showing the pictur
 
 # Building and running
 
-The games' memory dumps, taken from an emulator, are in `<game>/assets` (each system's README lists its files). Each system lists its games in `<system>/games.mk` (`GAMES += ...`), which the Makefile includes, and a new game's dumps in `<game>/assets` are committed like these (`.gitignore` ignores other `.bin` files). Building needs what the wrapper does (the Vulkan SDK, `glslc`, GLFW, GLM and Racket 8).
+The games' memory dumps, taken from an emulator, are in `<game>/assets` (each system's README lists its files). Each system lists its games in `<system>/games.mk` (`GAMES += ...`), which the Makefile includes, and a new game's dumps in `<game>/assets` are committed like these (`.gitignore` ignores other `.bin` files). Building needs what the wrapper does (the Vulkan SDK, `glslc`, GLFW, GLM and Racket 8). The tools that take new dumps are in [`tools/dump`](tools/dump/README.md).
 
     make                       # builds build/smb3/smb3 and build/batman/batman
     build/smb3/smb3            # in a window (--help for the options)
