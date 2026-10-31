@@ -4,8 +4,9 @@
 #   MESEN=/path/to/Mesen tools/dump/mesen-dump.sh <rom> <out-dir> [frame] [savestate.mss]
 #
 # MESEN is the Mesen executable (on macOS, Mesen.app/Contents/MacOS/Mesen). Mesen runs with a
-# throwaway HOME so it neither reads nor changes your own Mesen settings. Exits non-zero, with
-# Mesen's log on stderr, if the dump fails or a file has the wrong size.
+# throwaway HOME so it neither reads nor changes your own Mesen settings (unless it is portable,
+# see README.md). Exits non-zero, with Mesen's log on stderr, if the dump fails or a file has the
+# wrong size.
 set -eu
 
 if [ $# -lt 2 ] || [ $# -gt 4 ]; then
@@ -32,13 +33,29 @@ fi
 
 home=$(mktemp -d "${TMPDIR:-/tmp}/mesen-dump-home.XXXXXX")
 trap 'rm -rf "$home"' EXIT
+# Without a settings.json in its home folder, Mesen shows its setup wizard instead of running the
+# test (on Linux, that needs a display and then waits for a click). An empty one gives Mesen's
+# defaults. The home folder is .NET's ApplicationData folder plus Mesen2: on Linux
+# $XDG_CONFIG_HOME/Mesen2 (GitHub's runners set XDG_CONFIG_HOME, so it's pointed into the
+# throwaway HOME too), and on macOS ~/Library/Application Support/Mesen2, where ~ comes from
+# CFFIXED_USER_HOME rather than HOME. A portable Mesen, with a settings.json next to the
+# executable, uses that folder and its settings instead.
+for dir in "$home/.config/Mesen2" "$home/Library/Application Support/Mesen2"; do
+  mkdir -p "$dir"
+  echo '{}' >"$dir/settings.json"
+done
 
 # Seconds of emulation before Mesen gives up: generous, since each frame before the dumped one
 # runs at full speed and the dumped frame takes well under a second.
 timeout=$((10 + frame / 30))
 
+# DOTNET_SYSTEM_GLOBALIZATION_INVARIANT keeps .NET from loading ICU, which on Linux brings in the
+# system's libstdc++ before Mesen's core (built with its own copy) and makes the core's start-up
+# abort with std::bad_cast (seen on Ubuntu 24.04 with Mesen 2.1.1). Mesen's UI text isn't used here.
 status=0
-HOME="$home" PPU_DUMP_OUT="$out" PPU_DUMP_FRAME="$frame" PPU_DUMP_STATE="$state" \
+HOME="$home" CFFIXED_USER_HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+  DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 \
+  PPU_DUMP_OUT="$out" PPU_DUMP_FRAME="$frame" PPU_DUMP_STATE="$state" \
   "$MESEN" --testrunner \
   --debug.scriptWindow.allowIoOsAccess=true \
   --debug.scriptWindow.scriptTimeout=5 \

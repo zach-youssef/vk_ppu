@@ -21,10 +21,23 @@ Script → Settings → "Allow access to I/O and OS functions", or pass
 MESEN=/path/to/Mesen tools/dump/mesen-dump.sh <rom> <out-dir> [frame] [savestate.mss]
 ```
 
-On macOS `MESEN` is `Mesen.app/Contents/MacOS/Mesen`. The wrapper runs Mesen with `--testrunner`,
-which emulates as fast as it can without a window. It gives Mesen an empty `HOME` of its own, so
-your Mesen settings neither change the dump nor get changed by it. It then checks the exit code and
-the file sizes, and prints any warnings from `info.txt`.
+On macOS `MESEN` is `Mesen.app/Contents/MacOS/Mesen`; on Linux it is the `Mesen` file from the
+Linux x64 release, which also needs SDL2 (`libsdl2-2.0-0` on Ubuntu). The wrapper runs Mesen with
+`--testrunner`, which emulates as fast as it can without a window (and without a display on
+Linux). It gives Mesen a home folder of its own, with an empty `settings.json` (Mesen's defaults),
+so your Mesen settings neither change the dump nor get changed by it. Without that file Mesen
+opens its setup wizard instead of running. What that covers:
+
+- Linux: Mesen's folder is `$XDG_CONFIG_HOME/Mesen2`, and the wrapper points `XDG_CONFIG_HOME`
+  into its own `HOME`. CI runs this case.
+- macOS: Mesen's folder is `~/Library/Application Support/Mesen2`, where macOS takes `~` from
+  `CFFIXED_USER_HOME`, not `HOME`, so the wrapper sets both. This case is untested: dumps on macOS
+  so far used a portable Mesen.
+- A portable Mesen (one with a `settings.json` next to the executable, on either system) uses its
+  own folder instead, so its settings do apply to the dump; the test runner doesn't save them.
+
+The wrapper then checks the exit code and the file sizes, and prints any warnings from
+`info.txt`.
 
 - `frame` is which frame to dump, counted from 1 at the first frame that starts after the script
   (or the savestate) loads. It defaults to 1.
@@ -34,12 +47,19 @@ the file sizes, and prints any warnings from `info.txt`.
 Under the hood, the wrapper runs:
 
 ```sh
-HOME=<empty dir> PPU_DUMP_OUT=<out-dir> PPU_DUMP_FRAME=<frame> PPU_DUMP_STATE=<state> \
+HOME=<dir> CFFIXED_USER_HOME=<dir> XDG_CONFIG_HOME=<dir>/.config \
+  DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 \
+  PPU_DUMP_OUT=<out-dir> PPU_DUMP_FRAME=<frame> PPU_DUMP_STATE=<state> \
   Mesen --testrunner --debug.scriptWindow.allowIoOsAccess=true \
   --debug.scriptWindow.scriptTimeout=5 \
   --snes.disableFrameSkipping=true --pcEngine.disableFrameSkipping=true \
   tools/dump/mesen-dump.lua <rom> --timeout=<seconds>
 ```
+
+`<dir>/.config/Mesen2/settings.json` and `<dir>/Library/Application Support/Mesen2/settings.json`
+hold `{}`. `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT` stops
+.NET from loading ICU: on Linux that brings in the system's libstdc++ ahead of the copy built into
+Mesen's core, which then aborts with `std::bad_cast` as it loads (Mesen 2.1.1 on Ubuntu 24.04).
 
 With `PPU_DUMP_OUT` set, the script stops Mesen when it is done. Mesen exits with 0 on success
 and 1 when the dump fails, and the reason goes to stderr. A timeout, or a script that doesn't
