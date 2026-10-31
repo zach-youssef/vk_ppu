@@ -38,10 +38,14 @@ GitHub Actions (`.github/workflows/ci.yml`) checks every pushed commit, not only
 commits a working branch has beyond `main`, or those a push to `main` brings (at most the newest
 20). Each one is built on Ubuntu 24.04 with clang++, then runs `make test` (natively, on lavapipe,
 Mesa's software Vulkan driver, with validation including synchronization validation) and `make
-test-web` (under Node with Dawn, also on lavapipe), and gets a `test` commit status. The runner's
-setup and the commit listing are the wrapper's actions (`external/vulkan_test/.github/actions`),
-taken from the wrapper the pushed commit pins, so every commit is checked with the same setup. A
-failing check uploads its captured frames and their differences as an artifact.
+test-web` (under Node with Dawn, also on lavapipe), and gets a `test` commit status. The same job
+tests the dump tools: `make test-tools`, and the Mesen dump check (`tools/dump/test/check.sh`, run
+with Mesen 2's Linux release and cc65 from apt; see
+[tools/dump/README.md](tools/dump/README.md#checking-the-script) to run it locally). Commits from
+before the check existed skip it. The runner's setup and the commit listing are the wrapper's
+actions (`external/vulkan_test/.github/actions`), taken from the wrapper the pushed commit pins, so
+every commit is checked with the same setup. A failing check uploads its captured frames and their
+differences as an artifact, and a failing dump check its work directory (the test ROMs, the dumps and the files the check generates).
 
 The setup caches the Vulkan SDK, ccache and npm's downloads. GitHub scopes caches per branch: a
 branch restores only its own caches or the default branch's, and what it saves never reaches `main`.

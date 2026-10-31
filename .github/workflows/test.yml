@@ -1,6 +1,7 @@
 # Builds each commit's games, native and for the web, and runs their screenshot tests: `make test`
 # natively on lavapipe with validation (including synchronization validation), and `make test-web`
-# under Node with Dawn (on lavapipe).
+# under Node with Dawn (on lavapipe). It also runs the dump tools' tests: `make test-tools`, and the
+# Mesen dump check with Mesen 2's Linux release.
 # Each commit's job runs with a read-only token: ci.yml's pending and statuses jobs post its "test"
 # commit status from the job's conclusion (the job is named "test <sha>").
 name: test
@@ -78,6 +79,46 @@ jobs:
       - name: Screenshot tests (web, Dawn on lavapipe)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: make test-web
+
+      # The Mesen dump check (tools/dump/test/check.sh) needs no build, so it runs even when the
+      # screenshot tests fail. Commits from before it existed skip it. Both steps take seconds; the
+      # timeouts stop a hang (such as Mesen waiting in its setup wizard) well before the job's.
+      - name: Install Mesen 2 and cc65 for the dump check
+        id: mesen
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          MESEN_URL: https://github.com/SourMesen/Mesen2/releases/download/2.1.1/Mesen_2.1.1_Linux_x64.zip
+          MESEN_SHA256: 7a9947575cc198209f743fef83fb2b702b786ea705506bdf3f2aea01ab7c1ce9
+        run: |
+          if [ ! -f tools/dump/test/check.sh ]; then
+            echo "No tools/dump/test/check.sh in this commit: skipping the Mesen dump check"
+            exit 0
+          fi
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends cc65 libsdl2-2.0-0
+          curl -sSfL --retry 3 --retry-all-errors --connect-timeout 30 --max-time 120 -o "$RUNNER_TEMP/mesen.zip" "$MESEN_URL"
+          echo "$MESEN_SHA256  $RUNNER_TEMP/mesen.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/mesen.zip" Mesen -d "$RUNNER_TEMP/mesen"
+          chmod +x "$RUNNER_TEMP/mesen/Mesen"
+          echo "mesen=$RUNNER_TEMP/mesen/Mesen" >> "$GITHUB_OUTPUT"
+
+      # The work directory keeps the test ROMs, the dumps and the files the check generates, for a failure's review
+      - name: Mesen dump check
+        id: dump-check
+        if: ${{ !cancelled() && steps.mesen.outputs.mesen != '' }}
+        timeout-minutes: 3
+        env:
+          MESEN: ${{ steps.mesen.outputs.mesen }}
+        run: tools/dump/test/check.sh "$RUNNER_TEMP/dump-check"
+
+      - name: Upload the dump check's work directory
+        if: ${{ failure() && steps.dump-check.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: dump-check-${{ matrix.sha }}
+          path: ${{ runner.temp }}/dump-check
+          if-no-files-found: ignore
 
       # The captured frames, and the differences from the approved ones, for a failure's review
       - name: Upload the screenshots

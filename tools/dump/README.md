@@ -228,5 +228,19 @@ ROMs write (`test/check.py`):
 It also checks that a failed dump makes Mesen exit with 1, both when the script loads and from
 a callback during emulation.
 
-The check doesn't run in CI yet. The plan is a separate CI job that uses Mesen's Linux x64
-build (which has the same `--testrunner`) and cc65 from apt.
+CI runs this check on every commit, in each commit's `test` job (`.github/workflows/test.yml`),
+on Ubuntu 24.04 with Mesen 2.1.1's Linux x64 release (pinned by its SHA-256) and cc65 from apt.
+It needs no display. To reproduce it on Ubuntu or Debian:
+
+```sh
+sudo apt-get update
+sudo apt-get install cc65 libsdl2-2.0-0
+curl -LO https://github.com/SourMesen/Mesen2/releases/download/2.1.1/Mesen_2.1.1_Linux_x64.zip
+echo "7a9947575cc198209f743fef83fb2b702b786ea705506bdf3f2aea01ab7c1ce9  Mesen_2.1.1_Linux_x64.zip" |
+  sha256sum -c
+unzip Mesen_2.1.1_Linux_x64.zip Mesen && chmod +x Mesen
+MESEN=$PWD/Mesen tools/dump/test/check.sh
+```
+
+To move CI to a newer Mesen, change the URL and the SHA-256 in the workflow's install step
+(GitHub's release page lists each file's SHA-256).
