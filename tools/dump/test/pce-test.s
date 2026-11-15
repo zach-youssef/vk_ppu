@@ -16,6 +16,11 @@
 ; - A raster (RCR) interrupt at display line 100 writes BXR = c + 12 and BYR = 0, so the lines
 ;   below it scroll left and restart at background row 1. It also writes c to VRAM word $7001
 ;   (both bytes), so the dump warns that 2 bytes changed during the frame.
+; - The raster interrupt then writes colour 3 (blue, $0007, used by no tile: a palette swap that
+;   doesn't change the picture), low byte c, then high byte 1: the dump must log the colour as c
+;   after the first write and $100 | c after the second. It then writes $0007 back through the
+;   I/O page mapped into MPR1, which the dump doesn't watch, so the dump must warn about a missed
+;   write. The late vertical-blank write also restores $0007 before the next frame's display.
 ; - Every dumped register holds a distinctive value (see check.py).
 ; Nothing here is copied from a commercial ROM.
 
@@ -260,6 +265,25 @@ irq1:
 	lda counter
 	sta a:VDC_DATA_L
 	sta a:VDC_DATA_H
+	lda #3                ; colour 3 = c, then $100 | c: each byte takes effect on its own
+	sta VCE_ADDR_L
+	stz VCE_ADDR_H
+	lda counter
+	sta VCE_DATA_L
+	lda #$01
+	sta VCE_DATA_H
+	; Colour 3 = $0007 again, through the I/O page mapped at $2000-$3FFF (MPR1) for these writes,
+	; which the dump doesn't watch. No RAM (zero page, stack) until MPR1 is restored.
+	lda #$FF
+	tam #$02
+	lda #3
+	sta VCE_ADDR_L + $2000
+	stz VCE_ADDR_H + $2000
+	lda #$07
+	sta VCE_DATA_L + $2000
+	stz VCE_DATA_H + $2000
+	lda #$F8
+	tam #$02              ; MPR1 = RAM again
 @not_raster:
 	lda $2011
 	and #$20              ; vertical blank?
@@ -302,6 +326,12 @@ irq1:
 	sta VCE_ADDR_L
 	stz VCE_ADDR_H
 	lda counter
+	sta VCE_DATA_L
+	stz VCE_DATA_H
+	lda #3                ; colour 3 = $0007 again
+	sta VCE_ADDR_L
+	stz VCE_ADDR_H
+	lda #$07
 	sta VCE_DATA_L
 	stz VCE_DATA_H
 @done:

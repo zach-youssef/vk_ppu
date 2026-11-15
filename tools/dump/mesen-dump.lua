@@ -1,9 +1,9 @@
 -- Mesen 2 dump script for SNES and PC Engine (see README.md in this directory).
 --
 -- It dumps one frame: the video memory as it was when the frame's first displayed line started,
--- one row of registers per line, and the frame Mesen rendered, as a PNG. The console is detected from the
--- loaded ROM. It is one self-contained file so that it can be opened on its own in Mesen's
--- script window.
+-- one row of registers per line, the palette writes made during the frame's display, and the frame
+-- Mesen rendered, as a PNG. The console is detected from the loaded ROM. It is one self-contained
+-- file so that it can be opened on its own in Mesen's script window.
 --
 -- Environment (needs Script -> Settings -> "Allow access to I/O and OS functions", or
 -- --debug.scriptWindow.allowIoOsAccess=true on the command line):
@@ -268,6 +268,24 @@ local function snesRegisterRow(s)
   return string.pack("<" .. string.rep("I2", #row), table.unpack(row))
 end
 
+-- address and value are a write to CGDATA ($2122), from the CPU, DMA or HDMA, reported before the
+-- PPU handles it; s is the state at that point. The second write of a pair stores the colour: the
+-- low byte the first one buffered and this high byte. Returns the colour index and its BGR555 value
+-- after the write, or nil for a first write, and whether the index is a guess.
+-- While the PPU renders (outside forced blank and the H blank window CanAccessCgram allows), Mesen
+-- stores the colour at the address the PPU is reading, as the hardware does, rather than at
+-- CGADD's. It brings that address up to date only when it handles the write, after this callback,
+-- so the index is the address as of the PPU's last catch-up: a guess.
+local function snesColourWrite(_, value, s)
+  if not get(s, "ppu.cgramAddressLatch") then
+    return nil
+  end
+  local h = get(s, "memoryManager.hClock")
+  local direct = get(s, "ppu.forcedBlank") or get(s, "ppu.scanline") == 0 or h < 88 or h >= 1096
+  local index = direct and get(s, "ppu.cgramAddress") or get(s, "ppu.internalCgramAddress")
+  return index, get(s, "ppu.cgramWriteBuffer") | ((value & 0x7F) << 8), not direct
+end
+
 local SNES = {
   name = "SNES",
   memories = {
@@ -275,6 +293,24 @@ local SNES = {
     { file = "cgram.bin", memType = emu.memType.snesCgRam, size = 512 },
     { file = "oam.bin", memType = emu.memType.snesSpriteRam, size = 544 },
   },
+  -- The palette memory whose writes during the frame are logged (see README.md).
+  -- Mesen 2.1.1 never calls scripts' callbacks on CGRAM itself, so the log hooks CGDATA.
+  palette = {
+    file = "cgram.bin", writes = "cgram-writes.bin",
+    cpuType = emu.cpuType.snes, memType = emu.memType.snesRegister, first = 0x2122, last = 0x2122,
+  },
+  colourWrite = snesColourWrite,
+  -- The H counter in dots (0-339), as $213C reads it: Mesen's master clock position, in which
+  -- dots 323 and 327 last 6 clocks instead of 4.
+  dot = function(s)
+    local h = get(s, "memoryManager.hClock")
+    if h <= 1292 then
+      return h >> 2
+    elseif h <= 1310 then
+      return (h - 2) >> 2
+    end
+    return (h - 4) >> 2
+  end,
   rowSize = #SNES_REGISTERS * 2,
   -- Rows are scanlines 1..224 (1..239 with SETINI overscan), sampled at H = 23 dots, after
   -- every write that reaches the line's first pixel (Mesen draws pixel x once H > x + 22).
@@ -370,6 +406,18 @@ local function pceRegisterRow(s, start)
   return string.pack("<" .. string.rep("I2", #row), table.unpack(row))
 end
 
+-- address and value are a CPU write to the VCE's colour data ($0404 low, $0405 high), reported
+-- before the VCE handles it; s is the state at that point. Each byte changes the colour on its own,
+-- so every write gives the colour's new value.
+local function pceColourWrite(address, value, s)
+  local index = get(s, "vce.palAddr")
+  local old = emu.read(index * 2, emu.memType.pcePaletteRam) | (emu.read(index * 2 + 1, emu.memType.pcePaletteRam) << 8)
+  if address & 1 == 0 then
+    return index, (old & 0x100) | value
+  end
+  return index, (old & 0xFF) | ((value & 1) << 8)
+end
+
 local PCE_ROWS = 242      -- Mesen's output rows: VDC scanlines 14..255
 local PCE_BORDER = 18     -- Mesen's border on each side, in 5.37 MHz pixels
 
@@ -380,6 +428,19 @@ local PCE = {
     { file = "palette.bin", memType = emu.memType.pcePaletteRam, size = 1024 },
     { file = "sat.bin", memType = emu.memType.pceSpriteRam, size = 512 },
   },
+  -- The palette memory whose writes during the frame are logged (see README.md).
+  -- Mesen 2.1.1 never calls scripts' callbacks on palette memory itself, so the log hooks the VCE's
+  -- colour data registers where games map the I/O page: logical $0000-$1FFF (MPR0 = $FF). The VCE
+  -- is $0400-$07FF there, mirrored every 8 bytes; only offsets 4 and 5 store colours.
+  palette = {
+    file = "palette.bin", writes = "palette-writes.bin",
+    cpuType = emu.cpuType.pce, memType = emu.memType.pceMemory, first = 0x0400, last = 0x07FF,
+    filter = function(address) return address & 6 == 4 end,
+  },
+  colourWrite = pceColourWrite,
+  -- The dot in the VCE's current dot clock: Mesen's master clock position in the line divided by
+  -- the clock divider (4, 3 or 2), which is the pixel of its line buffer that Mesen draws next.
+  dot = function(s) return get(s, "vdc.hclock") // get(s, "vce.clockDivider") end,
   rowSize = #PCE_REGISTERS * 2,
   -- Rows are sampled at the end of each line (H = 1362 master clocks), after the line is
   -- drawn, when the VDC's latched scroll still holds the values that line used.
@@ -447,6 +508,33 @@ local function start()
   local rows = {}
   local memory = nil       -- the memory snapshot, taken at the first displayed line
   local changes = nil      -- warnings about memory that changed during the displayed lines
+  -- Palette writes from the memory snapshot to the end of the displayed lines, so that the
+  -- frame-start palette plus these writes gives the palette at any point of the frame.
+  local logging = false
+  local paletteWrites = {} -- rows of the writes file: line, dot, colour index, colour value
+  local guessedWrites = 0  -- rows whose colour index is a guess (see snesColourWrite)
+  local paletteMemory = nil
+  for _, m in ipairs(console.memories) do
+    if m.file == console.palette.file then
+      paletteMemory = m
+    end
+  end
+
+  -- The writes that store palette colours (see console.palette), with where the beam is.
+  local palette = console.palette
+  emu.addMemoryCallback(guarded(function(address, value)
+    if not logging or (palette.filter and not palette.filter(address)) then
+      return
+    end
+    local state = emu.getState()
+    local index, colour, guessed = console.colourWrite(address, value, state)
+    if index then
+      if guessed then
+        guessedWrites = guessedWrites + 1
+      end
+      paletteWrites[#paletteWrites + 1] = string.pack("<I2I2I2I2", console.scanline(state), console.dot(state), index, colour)
+    end
+  end), emu.callbackType.write, palette.first, palette.last, palette.cpuType, palette.memType)
 
   if statePath then
     local f, err = io.open(statePath, "rb")
@@ -471,16 +559,42 @@ local function start()
     for _, m in ipairs(console.memories) do
       memory[m.file] = readMemory(m.memType, m.size)
     end
+    logging = true
+  end
+
+  -- The palette as of now according to the log: the snapshot with the logged writes applied.
+  local function replayPalette()
+    local bytes = { memory[paletteMemory.file]:byte(1, -1) }
+    for _, row in ipairs(paletteWrites) do
+      local _, _, index, colour = string.unpack("<I2I2I2I2", row)
+      bytes[index * 2 + 1] = colour & 0xFF
+      bytes[index * 2 + 2] = colour >> 8
+    end
+    return string.char(table.unpack(bytes))
   end
 
   -- Compares memory with the snapshot at the end of the displayed lines, so that the game's
   -- uploads for the next frame, in vertical blank, don't count.
+  -- Palette memory is compared with the snapshot plus the logged writes instead: a difference
+  -- there means a write the log missed.
   local function compare()
+    logging = false
     changes = {}
     for _, m in ipairs(console.memories) do
-      local changed = countDifferences(memory[m.file], readMemory(m.memType, m.size))
-      if changed > 0 then
-        changes[#changes + 1] = string.format("%s changed in %d bytes after the first displayed line; the dump holds its state from the start of that line", m.file, changed)
+      local current = readMemory(m.memType, m.size)
+      if m == paletteMemory then
+        local changed = countDifferences(replayPalette(), current)
+        if changed > 0 then
+          changes[#changes + 1] = string.format("%s plus %s differs from the palette at the end of the display in %d bytes", m.file, console.palette.writes, changed)
+        end
+        if guessedWrites > 0 then
+          changes[#changes + 1] = string.format("%d rows of %s are writes made while the PPU was drawing; their colour index is a guess", guessedWrites, console.palette.writes)
+        end
+      else
+        local changed = countDifferences(memory[m.file], current)
+        if changed > 0 then
+          changes[#changes + 1] = string.format("%s changed in %d bytes after the first displayed line; the dump holds its state from the start of that line", m.file, changed)
+        end
       end
     end
   end
@@ -560,6 +674,7 @@ local function start()
       files[m.file] = memory[m.file]
     end
     files["registers.bin"] = table.concat(rows)
+    files[console.palette.writes] = table.concat(paletteWrites)
 
     local buffer = emu.getScreenBuffer()
     local count = #buffer
@@ -575,6 +690,7 @@ local function start()
       "height=" .. height,
       "rows=" .. #rows,
       "rowBytes=" .. console.rowSize,
+      "paletteWrites=" .. #paletteWrites,
     }
     for _, w in ipairs(warnings) do
       info[#info + 1] = "warning=" .. w

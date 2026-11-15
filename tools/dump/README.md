@@ -97,9 +97,31 @@ line: those lines are already drawn, so the dump is right, but the warning still
 line is displayed, memory is dumped as of the frame's end, also
 with a warning. The register rows show the state each line was drawn with.
 
+Palette memory is the exception to the warning: its writes from that first displayed line to the
+end of the display are logged in a palette writes file (`cgram-writes.bin` or
+`palette-writes.bin`), so a renderer can rebuild the palette at any point of the frame, as for an
+HDMA gradient or a raster palette swap. The palette file itself keeps the frame-start state. At
+the end of the display the script checks that the frame-start palette plus the logged writes is
+the palette in memory, and warns if it isn't (a write the log missed).
+
+The palette writes file is binary: one 8-byte row per colour write, four `uint16` fields, in the
+order the writes happened:
+
+| # | Field | Value |
+| --- | --- | --- |
+| 0 | line | the scanline the write happened on, in Mesen's numbering (the register rows' numbering below: SNES row *i* is scanline *i* + 1, PC Engine row *i* is scanline *i* + 14) |
+| 1 | dot | the horizontal position of the write, per console below |
+| 2 | index | the colour written (0-255 on SNES, 0-511 on PC Engine) |
+| 3 | value | the colour's whole value after the write, in the palette file's format |
+
+It is binary for the same reason as `registers.bin`: a renderer loads it as a buffer as is (an
+array of `uvec2`, or of four `uint16`), with no parsing, and replays it per line. Its length is
+`paletteWrites` × 8 bytes; a frame without palette writes gives an empty file.
+
 `info.txt` has one `key=value` per line: `console` (`SNES` or `PC Engine`), `frame` (Mesen's
 frame counter), `width` and `height` (the screenshot's size), `rows` and `rowBytes` (the size of
-`registers.bin`), and one `warning=` line per warning.
+`registers.bin`), `paletteWrites` (the number of rows in the palette writes file), and one
+`warning=` line per warning.
 
 #### SNES
 
@@ -108,6 +130,7 @@ frame counter), `width` and `height` (the screenshot's size), `rows` and `rowByt
 | `vram.bin` | 65536 | VRAM, 32768 words in address order, each low byte first |
 | `cgram.bin` | 512 | 256 colours, each a BGR555 word (`0bbbbbgggggrrrrr`) |
 | `oam.bin` | 544 | the 512-byte low table (128 sprites × x, y, tile, attributes), then the 32-byte high table (2 bits per sprite: bit 0 x bit 8, bit 1 size) |
+| `cgram-writes.bin` | 8 per row | the CGRAM writes during the display (see above) |
 | `registers.bin` | 90 per row | one row per line: 224 rows for scanlines 1 to 224, or 239 rows (1 to 239) when SETINI's overscan bit is set at the frame's start |
 | `screenshot.png` | | 256 × 224 (or 239) RGB; row *i* is register row *i* |
 
@@ -143,6 +166,18 @@ holds every write that reaches the start of the line. A write later in the line,
 handler's, shows from the next row on, even though Mesen's picture changes partway along the line.
 HDMA runs in the H-blank before a line, so it lands on the right row.
 
+In `cgram-writes.bin`, a row is logged when the game (CPU, DMA or HDMA) writes a colour's high
+byte to $2122, which stores both bytes; the script watches $2122 because Mesen 2.1.1 doesn't call
+scripts back on writes to CGRAM itself. `dot` is the PPU's H counter (0-339, as $213C reads it). Mesen draws pixel *x*
+of a line at dot *x* + 22 and looks colours up as it draws, so a write at dot *d* shows from pixel
+*d* − 21 on, and a write from dot 277 on (in H-blank, where HDMA writes) from the next line on. While the screen is drawn,
+Mesen writes a CPU's CGRAM write to the colour the PPU is reading at that moment, not to CGADD's,
+as the hardware does. The script can only read that address as of the PPU's last catch-up, which
+Mesen does when it handles the write, after the script's callback: such a row's `index` is a guess
+and may be wrong, and `info.txt` warns with the number of these rows. Writes in forced blank or in
+the H-blank window Mesen allows (H counter below 22 or from 274 on), which is where HDMA and
+well-behaved games write, have the right index.
+
 #### PC Engine
 
 | File | Size | Layout |
@@ -150,6 +185,7 @@ HDMA runs in the H-blank before a line, so it lands on the right row.
 | `vram.bin` | 65536 | VRAM, 32768 words in address order, each low byte first |
 | `palette.bin` | 1024 | the VCE's 512 colours, each a word (`0000000gggrrrbbb`); 0-255 background, 256-511 sprites |
 | `sat.bin` | 512 | the VDC's sprite attribute table (64 sprites × 4 words: y, x, pattern, attributes), as last copied from VRAM by the SATB DMA |
+| `palette-writes.bin` | 8 per row | the VCE palette writes during the display (see above) |
 | `registers.bin` | 32 per row | 242 rows, one for each of Mesen's output lines (VDC scanlines 14 to 255) |
 | `screenshot.png` | | width × 242 RGB, row *i* is register row *i* |
 
@@ -178,15 +214,33 @@ register fields (0-9) of that line's row. They take effect in `SCROLL_X`/`SCROLL
 line the VDC latches them for, the same way the picture changes. On a SuperGrafx, only the first
 VDC is dumped.
 
+In `palette-writes.bin`, every byte written to the VCE's colour data ($0404 low, $0405 high) is a
+row, since each one changes the colour on its own. `dot` counts pixels of the VCE's current dot
+clock from the start of the line: Mesen's master clock position (0-1364) divided by the clock
+divider (4, 3 or 2 for 5.37, 7.16 or 10.74 MHz). Mesen draws its line up to that pixel before the
+write, so the write shows from that pixel of Mesen's full line on. The screenshot starts later in
+the line (Mesen's left overscan and the border the script trims), so the write shows from
+screenshot column `dot` − 48, 72 or 120 (divider 4, 3 or 2) on, assuming Mesen's left overscan
+setting is 0, its default, which the wrapper uses. A write whose column is negative shows from the
+line's first pixel; one whose column is at or past the screenshot's width shows from the next line
+on.
+
+The script sees these writes where games map the I/O page, logical $0000-$1FFF (MPR0 = $FF, so
+the VCE is at $0400-$07FF): Mesen 2.1.1 doesn't call scripts back on writes to palette memory
+itself, and doesn't map the I/O page to an address scripts can watch in every bank. A game that
+writes colours through another bank gets the missed-write warning.
+
 ### Gaps and limits
 
 - **No scanline event.** Mesen's Lua API has none. The script uses the debugger's step command
   to stop at every line of the dumped frame, then reads `emu.getState()`. That makes the frame
   slow (a fraction of a second), but no other frame is affected.
-- **Per-line memory changes are lost.** Memory is one copy, from the first displayed line, so a
-  palette that changes down the screen (an SNES HDMA gradient written to $2121/$2122, or a PC
-  Engine raster palette swap) is in the dump only as it was on that line, plus a warning with
-  the number of bytes that changed. A reference mismatch on such a frame can come from this.
+- **Per-line VRAM and sprite memory changes are lost.** VRAM and OAM (SAT) are one copy, from
+  the first displayed line, so a change during the display is in the dump only as it was on that
+  line, plus a warning with the number of bytes that changed. A reference mismatch on such a
+  frame can come from this. Palette writes are logged instead (see the output files), with two
+  limits: a SNES CPU write to CGRAM while the PPU draws gets a guessed colour index, and a PC
+  Engine colour write through a bank other than MPR0 is missed; each gives a warning.
 - **Enums missing from `getState()`.** SNES WBGLOG, WOBJLOG and CGWSEL bits 4-7 are stored as
   enums that `getState()` doesn't return. The script keeps the last value written to $212A,
   $212B and $2130 instead. If none was written after the script started, which is always the
@@ -222,6 +276,10 @@ ROMs write (`test/check.py`):
 - The memory-changed warning, from a VRAM write during the PC Engine frame, and its absence for
   an upload early in vertical blank, before Mesen's frame ends (the test ROM's display ends at
   scanline 251, Mesen's frame at 256).
+- The palette writes files: an HDMA gradient on SNES colour 0 (one write per line, and one before
+  the first displayed line that must be in `cgram.bin` instead), and a raster palette swap on the
+  PC Engine, written one byte at a time, then undone through MPR1, which the log must miss and
+  warn about.
 - The no-displayed-line warning, from SNES frame 1, which is in forced blank throughout.
 - The screenshot's edges against the rows' scroll values, horizontally and vertically.
 

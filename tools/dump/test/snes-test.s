@@ -5,6 +5,10 @@
 ;   in steps of 8 lines), so its rows shear.
 ; - HDMA channel 1 keeps lines 1-8 in forced blank (INIDISP = $8F) and turns the display on from
 ;   line 9 ($0F).
+; - HDMA channel 2 writes colour 0 (the backdrop, which BG1 covers everywhere) through
+;   $2121/$2122: $5A5A once for lines 1-9, then a gradient of line * $41 on every line from 10 to
+;   224, in the H-blank before the line. The first displayed line (9) starts with $5A5A, and the
+;   dump must log the 215 writes after it.
 ; - A frame counter c, incremented by NMI, which sets BG1VOFS = $1F00 + c (BG1 uses $300 + c, so
 ;   the picture moves down a line every frame). So the dump's screenshot, registers and memory
 ;   must all come from the same frame.
@@ -58,6 +62,10 @@ DMAP1   = $4310
 BBAD1   = $4311
 A1T1L   = $4312
 A1B1    = $4314
+DMAP2   = $4320
+BBAD2   = $4321
+A1T2L   = $4322
+A1B2    = $4324
 
 counter = $10             ; the frame counter c (direct page)
 vline   = $11
@@ -283,13 +291,22 @@ reset:
 	stx A1T1L
 	lda #^inidisp_table
 	sta A1B1
+	; HDMA channel 2: mode 3 (two registers, each written twice) to CGADD and CGDATA.
+	lda #$03
+	sta DMAP2
+	lda #<CGADD
+	sta BBAD2
+	ldx #gradient_table
+	stx A1T2L
+	lda #^gradient_table
+	sta A1B2
 	; Enable HDMA in vertical blank, so that both channels start from their tables' first entry
 	; at the next frame (a channel enabled mid-frame runs from whatever state it was in).
 	lda RDNMI
 @vblank:
 	lda RDNMI
 	bpl @vblank
-	lda #$03
+	lda #$07
 	sta HDMAEN
 
 	ldx #112
@@ -414,6 +431,24 @@ inidisp_table:
 
 zero:
 	.byte 0                                ; DMA source for clearing VRAM and CGRAM
+
+; CGADD twice (colour 0), then the colour. The first entry writes once, at the start of line 1:
+; the NMI handler's CGRAM write on line 3 must not meet an HDMA write to CGADD.
+gradient_table:
+	.byte 9                                ; lines 1-9
+	.byte 0, 0
+	.word $5A5A
+	.byte $80 | 112                        ; lines 10-121, every line
+	.repeat 112, i
+	.byte 0, 0
+	.word (i + 10) * $41
+	.endrepeat
+	.byte $80 | 103                        ; lines 122-224, every line
+	.repeat 103, i
+	.byte 0, 0
+	.word (i + 122) * $41
+	.endrepeat
+	.byte 0
 
 hdma_table:
 	.repeat 28, i

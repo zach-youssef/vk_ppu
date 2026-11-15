@@ -44,6 +44,13 @@ def rows(data, names):
     return [dict(zip(names, struct.unpack(fmt, data[i:i + size]))) for i in range(0, len(data), size)]
 
 
+def palette_writes(directory, name, meta):
+    """Returns the rows of a palette writes file as (line, dot, index, value) tuples."""
+    data = read(directory, name)
+    expect(f"{name} size", len(data), 8 * int(meta.get("paletteWrites", ["-1"])[0]))
+    return [struct.unpack("<4H", data[i:i + 8]) for i in range(0, len(data) - len(data) % 8, 8)]
+
+
 def png(data):
     """Returns (width, height, rows of (r, g, b) tuples) for an 8-bit RGB PNG."""
     if data[:8] != b"\x89PNG\r\n\x1a\n":
@@ -133,6 +140,20 @@ def check_snes(directory):
     expect("colour 200", cgram[400:402], bytes([c, c & 0x7F]))
     expect("frame counter is running", c >= 5, True)
 
+    # HDMA channel 2 writes colour 0 in the H-blank before each line: $5A5A for lines 1-9 (on
+    # scanline 0, before the first displayed line), then line * $41 for lines 10 to 224, which
+    # come after the memory snapshot and must all be logged, on the scanline before.
+    expect("colour 0 at the first displayed line", cgram[0:2], struct.pack("<H", 0x5A5A))
+    writes = palette_writes(directory, "cgram-writes.bin", meta)
+    expect("CGRAM writes (line, index, value)", [(w[0], w[2], w[3]) for w in writes],
+           [(line - 1, 0, line * 0x41) for line in range(10, 225)])
+    # HDMA starts at H = 1104 master clocks (dot 276) and reaches CGDATA after its first
+    # transfers, so every write must be at dot 277 or later: from the next line on (README).
+    for w in writes:
+        expect(f"CGRAM write on scanline {w[0]} at dot {w[1]} from dot 277", 277 <= w[1] <= 339, True)
+    if writes:
+        print(f"snes: CGRAM write dots {min(w[1] for w in writes)}-{max(w[1] for w in writes)}")
+
     regs = rows(read(directory, "registers.bin"), SNES_REGISTERS)
     expect("rows", len(regs), 224)
     if len(regs) != 224:
@@ -192,8 +213,23 @@ def check_pce(directory):
     expect("VRAM word $7002", vram[0xE004:0xE006], bytes([c, c]))
     expect("colour 100", palette[200:202], bytes([c, 0]))
     expect("frame counter is running", c >= 3, True)
+    # Colour 3 is restored in vertical blank, then the raster handler writes c, then $100 | c,
+    # one byte at a time. The interrupt comes at the end of display line 99 (for line 100), and
+    # the handler reaches these writes after its VDC and VRAM writes, in display line 100
+    # (scanline 28 + 100). It then writes $0007 back through MPR1, which the log misses.
+    expect("colour 3 at the first displayed line", palette[6:8], struct.pack("<H", 0x0007))
+    writes = palette_writes(directory, "palette-writes.bin", meta)
+    expect("palette writes (line, index, value)", [(w[0], w[2], w[3]) for w in writes],
+           [(128, 3, c), (128, 3, 0x100 | c)])
+    expect("palette writes in order", len(writes) == 2 and writes[0][1] < writes[1][1], True)
+    # VCE_CR's dot clock is 5.37 MHz (divider 4): 341 dots a line, screenshot column = dot - 48.
+    for w in writes:
+        expect(f"palette write at dot {w[1]} within the line", 0 <= w[1] <= 1364 // 4, True)
+    print(f"pce: palette write dots {[w[1] for w in writes]} (screenshot columns {[w[1] - 48 for w in writes]})")
+    missed = sum(a != b for a, b in zip(struct.pack("<H", 0x100 | c), struct.pack("<H", 0x0007)))
     expect("warnings", meta.get("warning"), [
-        "vram.bin changed in 2 bytes after the first displayed line; the dump holds its state from the start of that line"])
+        "vram.bin changed in 2 bytes after the first displayed line; the dump holds its state from the start of that line",
+        f"palette.bin plus palette-writes.bin differs from the palette at the end of the display in {missed} bytes"])
 
     regs = rows(read(directory, "registers.bin"), PCE_REGISTERS)
     expect("rows", len(regs), 242)

@@ -81,9 +81,10 @@ rows=$(sed -n 's/^rows=//p' "$out/info.txt")
 row_bytes=$(sed -n 's/^rowBytes=//p' "$out/info.txt")
 check vram.bin 65536
 check registers.bin $((rows * row_bytes))
+palette_writes=$(sed -n 's/^paletteWrites=//p' "$out/info.txt")
 case $(sed -n 's/^console=//p' "$out/info.txt") in
-  SNES) check cgram.bin 512; check oam.bin 544 ;;
-  "PC Engine") check palette.bin 1024; check sat.bin 512 ;;
+  SNES) check cgram.bin 512; check oam.bin 544; check cgram-writes.bin $((palette_writes * 8)) ;;
+  "PC Engine") check palette.bin 1024; check sat.bin 512; check palette-writes.bin $((palette_writes * 8)) ;;
   *) echo "$0: unknown console in info.txt" >&2; exit 1 ;;
 esac
 grep '^warning=' "$out/info.txt" >&2 || true
