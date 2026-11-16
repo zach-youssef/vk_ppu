@@ -1,5 +1,6 @@
 #!/bin/sh
-# Builds the test ROMs, dumps them with mesen-dump.sh and checks the dumps (see ../README.md).
+# Runs bios-check.sh, then builds the test ROMs, dumps them with mesen-dump.sh and checks the
+# dumps (see ../README.md).
 #
 #   MESEN=/path/to/Mesen tools/dump/test/check.sh [work-dir]
 #
@@ -17,6 +18,11 @@ else
   work=$(mktemp -d "${TMPDIR:-/tmp}/mesen-dump-check.XXXXXX")
   keep=0
 fi
+
+# The PC Engine CD checks run a stand-in for Mesen: no System Card or disc can be used here.
+"$here/bios-check.sh" "$work/bios"
+# The cartridge dumps below must not see a card from the caller's environment.
+unset PPU_DUMP_BIOS
 
 for rom in snes pce; do
   ext=$([ $rom = snes ] && echo sfc || echo pce)

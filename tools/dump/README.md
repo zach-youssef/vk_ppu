@@ -4,11 +4,27 @@ These tools take the memory dumps and reference screenshots that the tests rende
 dumps a single frame: the video memory, the registers that the frame's lines were drawn with, and
 the emulator's own picture of that frame.
 
-- SNES and PC Engine: `mesen-dump.lua`, a [Mesen 2](https://www.mesen.ca) script (described
-  below).
+- SNES, PC Engine and PC Engine CD: `mesen-dump.lua`, a [Mesen 2](https://www.mesen.ca) script
+  (described below).
 - Genesis: see [genesis.md](genesis.md).
 
-## Mesen 2 (SNES and PC Engine)
+## Games, BIOS files and licensing
+
+ROMs, disc images, BIOS files and savestates are never committed, and never uploaded to CI (as
+inputs, caches or artifacts): they stay in a folder of their own outside the repo. CI tests the
+tools on test ROMs written for them (`test/`) and on made-up files. What a game's scene commits
+is what the dump tools write from them: the frame's video memory, its registers and the
+emulator's screenshot.
+
+Keep that folder in one subfolder per system, with BIOS files apart:
+
+| Folder | Holds |
+| --- | --- |
+| `snes/`, `pce/`, `genesis/` | cartridge ROMs, one file per game |
+| `pcecd/<game>/`, `segacd/<game>/` | one disc per folder: its `.cue` and every file the cue names, beside it under the names it gives |
+| `bios/` | the PC Engine System Card 3.0 (256 KB, see below) and the Sega CD BIOS for each disc region |
+
+## Mesen 2 (SNES, PC Engine and PC Engine CD)
 
 `mesen-dump.lua` works out the console from the loaded ROM. It needs Mesen 2.1 or later; it was
 written against 2.1.1. It must be allowed to write files: in the script window, turn on
@@ -18,7 +34,8 @@ Script → Settings → "Allow access to I/O and OS functions", or pass
 ### Headless
 
 ```sh
-MESEN=/path/to/Mesen tools/dump/mesen-dump.sh <rom> <out-dir> [frame] [savestate.mss]
+MESEN=/path/to/Mesen [PPU_DUMP_BIOS=<system card>] tools/dump/mesen-dump.sh \
+  <rom or .cue> <out-dir> [frame] [savestate.mss]
 ```
 
 On macOS `MESEN` is `Mesen.app/Contents/MacOS/Mesen`; on Linux it is the `Mesen` file from the
@@ -43,6 +60,32 @@ The wrapper then checks the exit code and the file sizes, and prints any warning
   (or the savestate) loads. It defaults to 1.
 - `savestate.mss` is loaded first. Save one in Mesen at the screen you want (File → Save State
   saves under Mesen's `SaveStates` folder), and the dump then starts from there.
+- `PPU_DUMP_BIOS` is the System Card for a PC Engine CD game (below). It is required for a `.cue`
+  and refused for anything else.
+
+#### PC Engine CD
+
+A PC Engine CD game is given as its `.cue`. Mesen 2.1.1 reads the files the cue names from the
+cue's own folder (a name with a folder in it is taken relative to that folder), and accepts data
+tracks in `MODE1/2352` or `MODE1/2048` and `AUDIO` tracks, which is how disc images are usually
+kept (`.bin` tracks). The dump's `console` is `PC Engine`, and its files are the PC Engine ones.
+
+Mesen loads the System Card from its home folder's `Firmware` folder, as
+`[BIOS] Super CD-ROM System (Japan) (v3.0).pce` or `syscard3.pce`, and checks only that it is
+262144 bytes. Version 3.0 runs every CD-ROM², Super CD-ROM² and Arcade CD-ROM² game; Games
+Express discs need a different card, which the wrapper doesn't provide. Mesen has no setting for
+the Firmware folder, and the wrapper's own home folder starts empty, so the wrapper copies
+`PPU_DUMP_BIOS` there as `Firmware/syscard3.pce` (in both of the home folders below). Before
+starting Mesen it exits with 2 and says why if:
+
+- the `.cue` has no `PPU_DUMP_BIOS`, or `PPU_DUMP_BIOS` isn't a 262144-byte file (without a card,
+  Mesen fails to load the game, and its window would ask for one with a dialog);
+- the `.cue` names no file, or a file that isn't in its folder;
+- `PPU_DUMP_BIOS` is set for a cartridge, which doesn't use it.
+
+A portable Mesen (below) loads the card from its own `Firmware` folder instead: the wrapper says
+so, and the card must then be in that folder. `PPU_DUMP_BIOS` is still required for a `.cue`
+then, on purpose: every CD dump names its card explicitly, whichever Mesen runs it.
 
 Under the hood, the wrapper runs:
 
@@ -57,7 +100,8 @@ HOME=<dir> CFFIXED_USER_HOME=<dir> XDG_CONFIG_HOME=<dir>/.config \
 ```
 
 `<dir>/.config/Mesen2/settings.json` and `<dir>/Library/Application Support/Mesen2/settings.json`
-hold `{}`. `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT` stops
+hold `{}`, and for a `.cue` each of those folders gets `Firmware/syscard3.pce`, a copy of
+`PPU_DUMP_BIOS`. `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT` stops
 .NET from loading ICU: on Linux that brings in the system's libstdc++ ahead of the copy built into
 Mesen's core, which then aborts with `std::bad_cast` as it loads (Mesen 2.1.1 on Ubuntu 24.04).
 
@@ -262,7 +306,12 @@ writes colours through another bank gets the missed-write warning.
 MESEN=/path/to/Mesen tools/dump/test/check.sh [work-dir]
 ```
 
-This needs [cc65](https://cc65.github.io) (`ca65`, `ld65`) and Python 3. It assembles the two
+This needs [cc65](https://cc65.github.io) (`ca65`, `ld65`) and Python 3. It first runs
+`test/bios-check.sh`, which needs neither Mesen nor a System Card nor a disc, so it also runs on
+its own (`tools/dump/test/bios-check.sh [work-dir]`): it gives the wrapper a stand-in for Mesen,
+a made-up `.cue` with its tracks and a 256 KB file of zeros, and checks each refusal above (with
+Mesen never started) and that a complete `.cue` gets the card copied into both home folders.
+No real CD dump runs in CI. Then it assembles the two
 test ROMs in `test/` (`snes-test.s` and `pce-test.s`, written for this check and free to
 redistribute), dumps frame 10 of each (and SNES frame 1), and checks the dumps against what the
 ROMs write (`test/check.py`):
