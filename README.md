@@ -32,6 +32,14 @@ needs Node 24 and npm as well.
     make test-web              # captures the same frames under Node and compares them with
                                # tests/approved
 
+A game can also be checked against the emulator its dumps came from: when
+`tests/reference/<game>.png` (the emulator's picture of the dumped moment) exists, `make test` and
+`make test-web` also compare frame 1 with it. The comparison is pixel-exact unless
+`tests/reference/<game>.tolerance` gives the largest channel difference allowed (an integer from 0
+to 255). A mismatch fails the test and writes the difference to
+`build/screenshots/<game>/reference/1.png.diff.png` (`build/screenshots-web` for the web), which
+`make approve-screenshots` leaves alone. Games without a reference (the NES games) skip the check.
+
 # CI
 
 GitHub Actions (`.github/workflows/ci.yml`) checks every pushed commit, not only the tip: the
