@@ -6,7 +6,9 @@ the emulator's own picture of that frame.
 
 - SNES, PC Engine and PC Engine CD: `mesen-dump.lua`, a [Mesen 2](https://www.mesen.ca) script
   (described below).
-- Genesis: see [genesis.md](genesis.md).
+- Genesis and Sega CD: `genesis-savestate.rkt` for the moment a savestate holds, and
+  `gpgx-frame/gpgx-dump.sh`, which runs the Genesis Plus GX libretro core headless for frames
+  after it; see [genesis.md](genesis.md).
 
 ## Games, BIOS files and licensing
 

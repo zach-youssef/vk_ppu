@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks the headless Genesis Plus GX frontend on the committed Genesis Plus GX
+# Checks the headless Genesis Plus GX frontend and gpgx-dump.sh on the committed Genesis Plus GX
 # fixture (../../test/genesis-test.gpgx-state, of genesis-test-rom.rkt's ROM, regenerated here):
 #
 #   tools/dump/gpgx-frame/test/check.sh [work-dir]
@@ -15,8 +15,12 @@
 #   frame 1, run one more frame, gives frame 2's picture and memory;
 # - RetroArch's container around the state gives the same frame;
 # - the frontend fails on a bad frame count or a file that isn't a state, and on a Mega-CD state
-#   from a build without the Nuked YM3438 core.
-# Needs Racket, Python 3 and what build.sh needs. The work directory (default: a
+#   from a build without the Nuked YM3438 core;
+# - gpgx-dump.sh writes the dump, the screenshot and info.txt, and refuses bad arguments, a GST
+#   state, a state that doesn't fit the game and the Sega CD BIOS cases with 2 before writing
+#   anything.
+# The Sega CD path itself needs a BIOS and a disc, which never go to CI: it's checked by hand
+# (genesis.md). Needs Racket, Python 3 and what build.sh needs. The work directory (default: a
 # temporary one, removed on success) keeps every file for a failure's review.
 set -euo pipefail
 
@@ -168,6 +172,76 @@ expect_frontend_failure "0 frames" "frames must be" "$fixture" 0
 expect_frontend_failure "a GST state" "refused the state" "$gst" 1
 expect_frontend_failure "an OpenEmu Mega-CD state" "without the Nuked YM3438" "$work/openemu-cd.state" 1
 [ ! -e "$work/x.png" ] && [ ! -e "$work/x.state" ] || failed "a refused run wrote output"
+
+# The wrapper
+wrapper=$here/../gpgx-dump.sh
+if "$wrapper" "$work/test.md" "$fixture" 1 "$work/dump" "$work/dump.state" >"$work/dump.txt" 2>&1 &&
+  same_dump "$work/fixture" "$work/dump" && cmp -s "$work/dump/screenshot.png" "$work/f1.png" &&
+  same_prefix "$work/dump.state" "$work/f1.state" &&
+  [ "$(cat "$work/dump/info.txt")" = "$(printf 'console=Genesis\nframe=1\nwidth=320\nheight=224')" ]; then
+  pass "gpgx-dump.sh writes the dump, the screenshot, info.txt and the state"
+else
+  failed "gpgx-dump.sh: $(cat "$work/dump.txt")"
+fi
+if "$wrapper" "$work/animated.md" "$fixture" 2 "$work/animated-dump" >"$work/animated-dump.txt" 2>&1 &&
+  [ "$(cram_entry "$work/animated-dump" 1)" = 0004 ] && cmp -s "$work/animated-dump/screenshot.png" "$work/a2.png" &&
+  python3 "$here/check.py" "$work/animated-dump/screenshot.png" 320 224 "$work/animated-dump/cram.bin"; then
+  pass "gpgx-dump.sh dumps the animated ROM's frame 2 with its own screenshot"
+else
+  failed "gpgx-dump.sh on the animated ROM: $(cat "$work/animated-dump.txt")"
+fi
+
+mkdir -p "$work/disc"
+head -c 131072 /dev/zero >"$work/bios.bin"
+head -c 1000 /dev/zero >"$work/short-bios.bin"
+head -c 2352 /dev/zero >"$work/disc/track01.bin"
+printf 'FILE "track01.bin" BINARY\r\n  TRACK 01 MODE1/2352\r\n    INDEX 01 00:00:00\r\n' >"$work/disc/game.cue"
+printf 'FILE "missing.bin" BINARY\n  TRACK 01 MODE1/2352\n' >"$work/disc/missing.cue"
+racket "$dump/test/genesis-megacd-state.rkt" "$work/megacd.state"
+long=$work/$(printf '%0130d' 0)/$(printf '%0130d' 0)
+mkdir -p "$long"
+cp "$work/test.md" "$long/test.md"
+# a cue whose own path fits, naming a track whose path (cue folder + name) doesn't
+long_track=$(printf '%0130d' 1).bin
+head -c 2352 /dev/zero >"$(dirname "$long")/$long_track"
+printf 'FILE "%s" BINARY\n  TRACK 01 MODE1/2352\n' "$long_track" >"$(dirname "$long")/long.cue"
+expect_refusal() {
+  local what=$1 message=$2
+  shift 2
+  local status=0
+  env "$@" >/dev/null 2>"$work/error.txt" || status=$?
+  if [ "$status" -ne 2 ]; then
+    failed "gpgx-dump.sh exits with $status for $what, not 2"
+  elif ! grep -q "$message" "$work/error.txt"; then
+    failed "gpgx-dump.sh refuses $what without saying '$message': $(cat "$work/error.txt")"
+  elif [ -e "$work/refused" ]; then
+    failed "gpgx-dump.sh refuses $what but wrote $work/refused"
+  else
+    pass "gpgx-dump.sh refuses $what"
+  fi
+}
+expect_refusal "frame 0" "frame 0 is the saved frame" "$wrapper" "$work/test.md" "$fixture" 0 "$work/refused"
+expect_refusal "frame 00" "frame 0 is the saved frame" "$wrapper" "$work/test.md" "$fixture" 00 "$work/refused"
+expect_refusal "a frame that isn't a number" "whole number" "$wrapper" "$work/test.md" "$fixture" x "$work/refused"
+expect_refusal "a frame with a leading zero" "leading zeros" "$wrapper" "$work/test.md" "$fixture" 07 "$work/refused"
+expect_refusal "a frame over 1000000" "at most 1000000" "$wrapper" "$work/test.md" "$fixture" 1000001 "$work/refused"
+expect_refusal "a game path over 255 bytes" "over 255 bytes" "$wrapper" "$long/test.md" "$fixture" 1 "$work/refused"
+expect_refusal "a Mega-CD state with a cartridge" "give the disc's .cue" \
+  "$wrapper" "$work/test.md" "$work/megacd.state" 1 "$work/refused"
+expect_refusal "a Mega Drive state with a disc" "not a Mega-CD one" \
+  PPU_DUMP_BIOS="$work/bios.bin" "$wrapper" "$work/disc/game.cue" "$fixture" 1 "$work/refused"
+expect_refusal "a missing state" "no such file" "$wrapper" "$work/test.md" "$work/none.state" 1 "$work/refused"
+expect_refusal "a GST state" "isn't a Genesis Plus GX state" "$wrapper" "$work/test.md" "$gst" 1 "$work/refused"
+expect_refusal "PPU_DUMP_BIOS for a cartridge" "only for Sega CD games" \
+  PPU_DUMP_BIOS="$work/bios.bin" "$wrapper" "$work/test.md" "$fixture" 1 "$work/refused"
+expect_refusal "a .cue without PPU_DUMP_BIOS" "needs PPU_DUMP_BIOS" \
+  PPU_DUMP_BIOS= "$wrapper" "$work/disc/game.cue" "$fixture" 1 "$work/refused"
+expect_refusal "a BIOS of the wrong size" "131072 bytes" \
+  PPU_DUMP_BIOS="$work/short-bios.bin" "$wrapper" "$work/disc/game.cue" "$fixture" 1 "$work/refused"
+expect_refusal "a .cue naming a missing track" "missing.bin" \
+  PPU_DUMP_BIOS="$work/bios.bin" "$wrapper" "$work/disc/missing.cue" "$fixture" 1 "$work/refused"
+expect_refusal "a .cue naming a track whose path is over 255 bytes" "over 255 bytes" \
+  PPU_DUMP_BIOS="$work/bios.bin" "$wrapper" "$(dirname "$long")/long.cue" "$fixture" 1 "$work/refused"
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures check(s) failed; the files are in $work" >&2

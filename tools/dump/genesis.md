@@ -68,9 +68,80 @@ screenshot show the same frame.
 - **Genesis Plus GX** 1.7.5 or 1.7.6 (the version string at the start of its states, unchanged
   since 2013): the core's own state, as the libretro core's `retro_serialize` writes it. In
   RetroArch, turn off savestate compression (Settings > Saving) first; its uncompressed container
-  (`RASTATE`) is unwrapped. OpenEmu's Genesis Plus GX core should work too, but hasn't been tried.
+  (`RASTATE`) is unwrapped. OpenEmu's Genesis Plus GX core should work too, but hasn't been
+  tried; use it for frame 0 only (below).
 - **Mega-CD:** Genesis Plus GX 1.7.6 only, built since Sep 2021, on a 64-bit host (RetroArch or
   OpenEmu). The state embeds the BIOS's program RAM, so never commit one; commit the dumped files.
+
+## Frames after the state (frame N >= 1)
+
+**Take states for frame N >= 1 in RetroArch with its Genesis Plus GX core** (savestate
+compression off). OpenEmu is for frame 0 captures only: its states don't run correctly in the
+core built here (see "Which states run" below).
+
+A savestate carries no picture, so a dump straight from it (frame 0) takes its reference from the
+emulator's own screenshot, which must be the native, unfiltered frame. For frame N >= 1,
+`gpgx-frame/gpgx-dump.sh` runs the Genesis Plus GX libretro core headless from the state and
+writes both the dump and its reference from that same moment:
+
+    [PPU_DUMP_BIOS=<Sega CD BIOS>] tools/dump/gpgx-frame/gpgx-dump.sh \
+      <rom or .cue> <state> <frame> <out-dir> [state-out]
+
+It runs `<frame>` frames from the state (1 is the first frame after the state loads, as for
+Mesen's dumps), saves the core's state after the last one and extracts it into `<out-dir>` with
+`genesis-savestate.rkt` (the files above), beside them:
+
+| File             | Contents                                                                                 |
+|------------------|------------------------------------------------------------------------------------------|
+| `screenshot.png` | frame N as the core drew it: native size (320 x 224 in H40, 256 x 224 in H32), unfiltered, 8-bit RGB |
+| `info.txt`       | `console=Genesis` or `Sega CD`, `frame=N`, `width=`, `height=`, one per line              |
+
+`<rom or .cue>` must be the exact game the state was saved from: the core doesn't check, and
+runs another game's (or another revision's) state into garbage without an error.
+
+The state after the frame goes to `[state-out]` if given (never commit it, as with any state).
+The state after frame N is frame N's memory: the core's `retro_run` runs the vertical blank first
+and the active lines last, so a state saved between two runs holds the VDP as the frame just
+drawn used it, and running one frame from the state after frame 1 gives frame 2 exactly.
+
+Colours: the core draws in RGB565 (a CRAM channel `c`, 0 to 7, is the 4-bit level `2c` in 5 or
+6 bits), and the PNG widens each channel to 8 bits by repeating its top bits, as RetroArch's
+screenshots do. Shadow and highlight levels come through the same way.
+
+The script exits with 2, before running the core or writing anything, for frame 0 (also written
+`00`: use the extractor and the emulator's screenshot), a frame that isn't a whole number from 1
+to 1000000 written without leading zeros, a missing file, a game path over 255 bytes (the core
+truncates longer ones), a state the extractor can't read or that isn't a Genesis Plus GX state
+(GST states from BlastEm or Gens can't be run on), a Mega-CD state with a cartridge or a Mega Drive
+state with a disc, and the Sega CD cases below. It exits with 1 if the core fails.
+
+`gpgx-frame/build.sh` builds the core and the frontend into `build/gpgx-frame` on first use (a few
+seconds; git, make, a C compiler and zlib's headers, `zlib1g-dev` on Ubuntu) and reuses them
+afterwards; dumps run at the same time take turns building. The core is libretro/Genesis-Plus-GX at
+the commit `build.sh` pins: fetched by its hash, which pins the whole source tree (there's no
+release binary to pin by checksum, as Mesen's is). To bump it, change `GPGX_COMMIT`, rerun
+`gpgx-frame/test/check.sh`, and check that the savestate layouts above still hold. Genesis Plus GX
+is GPL and non-commercial: the frontend (`gpgx-frame.c`) builds and calls the core from its own
+repository, and none of its code is copied into this one. The frontend gives the core its default
+options, no input and no audio.
+
+**Which states run:** the core only loads states of its own layout. Builds differ by a byte when
+one was built with the Nuked YM3438 sound core (as libretro's, and so RetroArch's, always is) and
+the other without (OpenEmu's): such a state loads, but everything after the VDP (the sound chips,
+the Z80, the 68K and, for a Mega-CD, the CD part) is misread, so the frames run from it can go
+wrong without an error. For the Mega-CD the frontend detects that build and refuses its states;
+for the Mega Drive the two can't be told apart, hence RetroArch for frame N >= 1. Frame 0 dumps
+from any build are fine. A core matching OpenEmu's build is a possible follow-up, only if frame
+N >= 1 captures from OpenEmu turn out to be needed.
+
+**Sega CD:** give the `.cue` (its tracks beside it, under the names it gives) and set
+`PPU_DUMP_BIOS` to the 128 KB BIOS for the disc's region; it's copied into a temporary system
+folder as `bios_CD_U.bin`, `bios_CD_E.bin` and `bios_CD_J.bin`, so the core finds it whichever
+region it detects. The script refuses a `.cue` without a BIOS, naming a missing track or one whose
+path (the cue's folder plus its name) is over 255 bytes, a BIOS that isn't 131072 bytes, a BIOS
+for a cartridge, and a Mega-CD state from a build before Feb 2024 (the extractor's layout line). This path isn't tested yet: CI has no BIOS or disc, so
+it's checked by hand with a real BIOS, disc and state (run it for frames 1 and 2, then check that
+the screenshots match the game and that the state after frame 1, run one frame, gives frame 2).
 
 ## The formats
 
@@ -164,11 +235,12 @@ To remake the ROM: `racket tools/dump/test/genesis-test-rom.rkt test.bin`. Its a
 frame and is otherwise the same, so the fixtures run on into it.
 
 No real Mega-CD state can be committed (each embeds BIOS-derived PRG-RAM), so the Mega-CD tests
-build synthetic ones: the Genesis Plus GX fixture's prefix up to the marker, then `"SCD!"` and a CD
-part assembled field by field from GPGX's saved sizes for each known build (so they check the
-tool's offsets rather than restate them), with patterns in the registers, the render state, the
-CDC RAM and word RAM, in both word RAM modes. They check every output file, and that a 1.7.5
-state, an unknown marker offset, an ambiguous or garbled layout and a truncated state fail.
+build synthetic ones (`test/genesis-megacd-state.rkt`): the Genesis Plus GX fixture's prefix up to
+the marker, then `"SCD!"` and a CD part assembled field by field from GPGX's saved sizes for each
+known build (so they check the tool's offsets rather than restate them), with patterns in the
+registers, the render state, the CDC RAM and word RAM, in both word RAM modes. They check every
+output file, and that a 1.7.5 state, an unknown marker offset, an ambiguous or garbled layout and a
+truncated state fail.
 
 `gpgx-frame/gpgx-frame.c` is a headless libretro frontend for the Genesis Plus GX core: it loads a
 game and a state, runs N frames, and writes the last frame as a PNG and the state after it.
@@ -182,5 +254,8 @@ states after them extract to the fixture's memory (the ROM only loops), and on t
 each of frames 1 to 3 shows only its own state's CRAM and differs from the others, so a picture
 paired with the wrong frame's state fails; one frame from the state after frame 1 gives frame 2's
 picture and memory (comparing the state up to the sound context, whose host pointers change from
-run to run), RetroArch's container works, and the frontend refuses a bad frame count, a GST state
-and an OpenEmu-built Mega-CD state.
+run to run), RetroArch's container works, the frontend refuses a bad frame count, a GST state and
+an OpenEmu-built Mega-CD state, and `gpgx-dump.sh` writes the dump, `screenshot.png`, `info.txt`
+and the state (also on the animated ROM), and refuses the bad inputs above with 2 before writing
+anything (the Sega CD ones with a made-up BIOS and disc, and a synthetic Mega-CD state, before the
+core runs).
