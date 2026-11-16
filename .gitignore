@@ -3,3 +3,5 @@ build/
 *.bin
 # Every game's memory dumps (<game>/assets), dumped from an emulator, which it renders
 !/*/assets/**/*.bin
+# Racket's compiled output (raco make, raco test)
+/tools/dump/**/compiled/

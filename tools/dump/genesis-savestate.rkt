@@ -6,11 +6,12 @@
 ;;   racket tools/dump/genesis-savestate.rkt <savestate> <out-dir>
 ;;
 ;; writes <out-dir>/vram.bin (65536 bytes), cram.bin (128), vsram.bin (80) and registers.bin (24),
-;; and exits non-zero, writing nothing, when the savestate isn't one it can read.
+;; plus wordram.bin (262144) and asic.bin (56) for a Genesis Plus GX Mega-CD state, and exits
+;; non-zero, writing nothing, when the savestate isn't one it can read.
 
 (require racket/list)
 
-(provide extract-savestate output-files)
+(provide extract-savestate output-files megacd-output-files)
 
 ;; The output files, in the order they're written, with their sizes
 (define output-files
@@ -18,6 +19,11 @@
     (cram "cram.bin" 128)
     (vsram "vsram.bin" 80)
     (registers "registers.bin" 24)))
+
+;; Written as well for a Mega-CD state (Genesis Plus GX only; GST has no Mega-CD part)
+(define megacd-output-files
+  '((wordram "wordram.bin" 262144)
+    (asic "asic.bin" 56)))
 
 ;; ---------------------------------------------------------------------------------------------
 ;; Gens, Kega Fusion, Genecyst and BlastEm (ui.state_format gst): the GST layout, at fixed offsets.
@@ -41,6 +47,100 @@
 (define gpgx-vsram (+ gpgx-cram #x80))
 (define gpgx-registers (+ gpgx-vsram #x80))
 (define gpgx-min-size (+ gpgx-registers #x20))
+
+;; Mega-CD (Genesis Plus GX only). state_save() keeps the Mega Drive prefix above, then after the
+;; VDP comes the sound, 68K and Z80 contexts, the marker "SCD!" and the CD hardware
+;; (scd_context_save in cd_hw/scd.c). The sound and Z80 contexts are host structs saved whole
+;; (the YM2612's and the Z80's hold pointers), so the marker's offset depends on the host and the
+;; build. These are the offsets on 64-bit hosts, worked out from GPGX's sources and checked
+;; against the Mega Drive fixture, whose Z80 context ends at 0x234C6 (see genesis.md):
+;;   VDP end 0x2256B; config.ym3438 (1 byte, only in builds with the Nuked YM3438 core);
+;;   MAME YM2612 (3576 + 48) or Nuked YM3438 (1252 + 96 + 8 + 4); PSG (124); fm_cycles_start
+;;   (4); 68K (90); Z80_Regs (88).
+(define gpgx-scd-markers
+  '(#x234C6   ; MAME YM2612 in a build with the Nuked YM3438 core (RetroArch's default)
+    #x234C5   ; MAME YM2612 in a build without it (OpenEmu)
+    #x22BEE)) ; Nuked YM3438 (RetroArch's "nuked" FM option)
+(define gpgx-scd-marker #"SCD!")
+;; Where to look for a marker at an offset not listed above (a 32-bit host, another build), to
+;; say so instead of treating a Mega-CD state as a Mega Drive one
+(define gpgx-scd-search (cons (+ gpgx-min-size 38) #x24000))
+
+;; From the marker: scd.regs (256 little-endian words, register $FF80xx at word xx/2), the timers,
+;; then the gfx context: cycles, cyclesPerLine and dotMask (32-bit), stampShift and mapShift
+;; (8-bit), bufferOffset (16-bit), bufferStart, and the trace and map pointers as offsets into
+;; word RAM (32-bit), all little-endian.
+(define scd-regs 4)
+(define scd-gfx #x212)
+(define scd-cdc #x22E)
+
+;; The CD part is read only from "GENPLUS-GX 1.7.6" states: 1.7.5 ones predate e87891f (Sep
+;; 2021), which grew the CDD context, and aren't supported.
+(define gpgx-scd-version #"GENPLUS-GX 1.7.6")
+
+;; What follows the gfx context changed twice without a new version string, as GPGX's CDC rework
+;; (fcb6620, Nov 2023, to e8a6086, Feb 2024) changed how the CDC is saved, so word RAM sits at one
+;; of three offsets. After the CDC comes its DMA target (1 byte), then the CDD context (33 bytes:
+;; cycles, latency, index (32-bit) ...), PCM (65672 bytes) and PRG-RAM (0x80000), the same in all
+;; three. A layout is told apart by facts that hold for its own states and rarely for the others
+;; (check : data cdc-offset -> boolean); a state must match exactly one.
+(define cdc-registers 24) ; ifstat, ifctrl, dbc, dac, pt, wa, ctrl[2], head[2][4], stat[4]
+(define cdc-ram (+ #x4000 2352))
+(define cdd-size 33)
+(define cdd-index 8)
+(define pcm-size 65672)
+(define prg-ram-size #x80000)
+
+;; cdc-size: the CDC's saved bytes up to the DMA target
+(struct cd-layout (name cdc-size check))
+
+(define (cd-layout-wordram l)
+  (+ scd-cdc (cd-layout-cdc-size l) 1 cdd-size pcm-size prg-ram-size))
+
+;; cdd.index, the current track, is at most 100
+(define (track-index-ok? data l cdc)
+  (<= (le-long data (+ cdc (cd-layout-cdc-size l) 1 cdd-index)) 100))
+
+(define (dma-target data l cdc) (bytes-ref data (+ cdc (cd-layout-cdc-size l))))
+(define (host-pointer data at) (integer-bytes->integer data #f #f at (+ at 8)))
+
+(define gpgx-cd-layouts
+  (letrec
+      ([current
+        ;; the registers, cycles[2] (8), the CDC RAM; DMA target 0 to 7
+        (cd-layout "builds since Feb 2024 (e8a6086), such as a current RetroArch core"
+                   (+ cdc-registers 8 cdc-ram)
+                   (λ (data cdc)
+                     (and (<= (dma-target data current cdc) 7)
+                          (track-index-ok? data current cdc))))]
+       [rework
+        ;; the registers, cycles (4), the DMA callback pointer (8; non-null exactly when the
+        ;; target is 1 to 5, while 6 and 7 are a halted DMA), the CDC RAM; DMA target 0 to 7
+        (cd-layout "builds from Nov 2023 (fcb6620) to Feb 2024 (before e8a6086)"
+                   (+ cdc-registers 4 8 cdc-ram)
+                   (λ (data cdc)
+                     (define pointer (host-pointer data (+ cdc cdc-registers 4)))
+                     (define target (dma-target data rework cdc))
+                     (and (< pointer (expt 2 48))
+                          (<= target 7)
+                          (eq? (zero? pointer) (not (<= 1 target 5)))
+                          (track-index-ok? data rework cdc))))]
+       [old
+        ;; the whole cdc_t, 18776 bytes on 64-bit hosts: the registers, cycles (4), padding (4,
+        ;; zero), the DMA callback pointer (8; null exactly when the target is 0), the CDC RAM;
+        ;; DMA target 0 to 5
+        (cd-layout "builds from Sep 2021 (e87891f) to Nov 2023 (before fcb6620), such as OpenEmu's (a2931d1)"
+                   (+ cdc-registers 4 4 8 cdc-ram)
+                   (λ (data cdc)
+                     (define pointer (host-pointer data (+ cdc cdc-registers 8)))
+                     (define target (dma-target data old cdc))
+                     (and (zero? (le-long data (+ cdc cdc-registers 4)))
+                          (< pointer (expt 2 48))
+                          (<= target 5)
+                          (eq? (zero? pointer) (zero? target))
+                          (track-index-ok? data old cdc))))])
+    (list current rework old)))
+(define wordram-size #x40000)
 
 (define (fail fmt . args) (raise-user-error 'genesis-savestate (apply format fmt args)))
 
@@ -80,10 +180,84 @@
 
 (define (extract-gpgx data)
   (check-size data gpgx-min-size "the Genesis Plus GX")
-  (hasheq 'vram (words data gpgx-vram 32768 le-word)
-          'cram (words data gpgx-cram 64 le-word unpack-gpgx-color)
-          'vsram (words data gpgx-vsram 40 le-word)
-          'registers (subbytes data gpgx-registers (+ gpgx-registers 24))))
+  (define vdp
+    (hasheq 'vram (words data gpgx-vram 32768 le-word)
+            'cram (words data gpgx-cram 64 le-word unpack-gpgx-color)
+            'vsram (words data gpgx-vsram 40 le-word)
+            'registers (subbytes data gpgx-registers (+ gpgx-registers 24))))
+  (define marker (find-scd-marker data))
+  (if marker
+      (for/fold ([memory vdp]) ([(k v) (in-hash (extract-megacd data marker))])
+        (hash-set memory k v))
+      vdp))
+
+(define (marker-at? data at)
+  (and (<= (+ at 4) (bytes-length data)) (equal? (subbytes data at (+ at 4)) gpgx-scd-marker)))
+
+;; The marker's offset if the state is a Mega-CD one, #f if it's a Mega Drive one
+(define (find-scd-marker data)
+  (cond
+    [(for/first ([m (in-list gpgx-scd-markers)] #:when (marker-at? data m)) m)]
+    [(for/first ([at (in-range (car gpgx-scd-search) (cdr gpgx-scd-search))]
+                 #:when (marker-at? data at))
+       at)
+     => (λ (at)
+          (fail "the Mega-CD marker (SCD!) is at $~a, not where a 64-bit Genesis Plus GX puts it (~a): a 32-bit host or an unknown build, whose layout this tool doesn't know"
+                (number->string at 16)
+                (map (λ (m) (string-append "$" (number->string m 16))) gpgx-scd-markers)))]
+    [else #f]))
+
+;; wordram: 2M order, big-endian words. asic: see genesis.md.
+(define (extract-megacd data marker)
+  (unless (prefix? data gpgx-scd-version)
+    (fail "this Mega-CD savestate is from Genesis Plus GX ~a; only ~a states are supported"
+          (bytes->string/latin-1 (subbytes data 11 16)) gpgx-scd-version))
+  ;; every layout's word RAM must fit, or a truncated state could match only a layout it isn't
+  (when (< (bytes-length data) (+ marker (apply max (map cd-layout-wordram gpgx-cd-layouts)) wordram-size))
+    (fail "the Mega-CD savestate is ~a bytes, shorter than its word RAM's end (truncated?)"
+          (bytes-length data)))
+  (define layouts
+    (filter (λ (l) ((cd-layout-check l) data (+ marker scd-cdc))) gpgx-cd-layouts))
+  (unless (= (length layouts) 1)
+    (fail "can't tell which Genesis Plus GX Mega-CD layout this is (~a); the known ones are ~a"
+          (if (null? layouts) "it matches none" (format "it matches ~a" (map cd-layout-name layouts)))
+          (map cd-layout-name gpgx-cd-layouts)))
+  (define layout (first layouts))
+  (define regs (+ marker scd-regs))
+  ;; $FF8003 (the low byte of word 1) bit 2, MODE: 1M mode
+  (define one-m? (bitwise-bit-set? (bytes-ref data (+ regs 2)) 2))
+  (define at (+ marker (cd-layout-wordram layout)))
+  ;; 2M: one block of host-order words. 1M: two 128 KB banks, and 2M word 2i is bank 0 word i,
+  ;; 2i+1 is bank 1 word i.
+  (define (source-word i)
+    (if one-m?
+        (+ at (* 2 (+ (quotient i 2) (* #x10000 (remainder i 2)))))
+        (+ at (* 2 i))))
+  (define wordram (make-bytes wordram-size))
+  (for ([i (in-range (quotient wordram-size 2))])
+    (define from (source-word i))
+    (bytes-set! wordram (* 2 i) (bytes-ref data (add1 from)))
+    (bytes-set! wordram (add1 (* 2 i)) (bytes-ref data from)))
+  (define gfx (+ marker scd-gfx))
+  (define (gfx-field offset size) (integer-bytes->integer data #f #f (+ gfx offset) (+ gfx offset size)))
+  (define (be32 n) (integer->integer-bytes n 4 #f #t))
+  (define asic
+    (bytes-append
+     (words data (+ regs 2) 1 le-word)                    ; $FF8002
+     (words data (+ regs #x58) 8 le-word)                 ; $FF8058 to $FF8066
+     (make-bytes 2 0)
+     (be32 (gfx-field 0 4))                               ; cycles
+     (be32 (gfx-field 4 4))                               ; cyclesPerLine
+     (be32 (gfx-field 8 4))                               ; dotMask
+     (be32 (bytes-ref data (+ gfx 12)))                   ; stampShift
+     (be32 (bytes-ref data (+ gfx 13)))                   ; mapShift
+     (be32 (gfx-field 14 2))                              ; bufferOffset
+     (be32 (gfx-field 16 4))                              ; bufferStart
+     (be32 (gfx-field 20 4))                              ; trace pointer
+     (be32 (gfx-field 24 4))))                            ; map pointer
+  (hasheq 'wordram wordram 'asic asic
+          'megacd (format "Mega-CD, word RAM in ~a mode (CD part laid out as GPGX ~a)"
+                          (if one-m? "1M" "2M") (cd-layout-name layout))))
 
 ;; RetroArch's uncompressed container: "RASTATE" and a version byte, then blocks of a 4-byte id,
 ;; a little-endian 32-bit length and the content padded to 8 bytes; the core's state is "MEM ".
@@ -100,8 +274,9 @@
           [(equal? id #"END ") (fail "the RetroArch savestate has no core state (MEM block)")]
           [else (loop (+ start (* 8 (quotient (+ len 7) 8))))])))
 
-;; extract-savestate : bytes -> (values format-name (hash/c symbol? bytes?))
-;; The hash has one entry per output-files name, in the VDP's big-endian order.
+;; extract-savestate : bytes -> (values format-name (hash/c symbol? any/c))
+;; The hash has one entry per output-files name, in the VDP's big-endian order; for a Mega-CD
+;; state, one per megacd-output-files name too, and 'megacd, a one-line description.
 (define (extract-savestate data)
   (define-values (name memory)
     (cond
@@ -153,8 +328,10 @@
     (command-line #:args (savestate out-dir) (values savestate out-dir)))
   (with-handlers ([exn:fail? (λ (e) (eprintf "~a\n" (exn-message e)) (exit 1))])
     (define-values (name memory) (extract-savestate (file->bytes state-path)))
+    (define files
+      (if (hash-has-key? memory 'megacd) (append output-files megacd-output-files) output-files))
     (make-directory* out-dir)
-    (for ([file (in-list output-files)])
+    (for ([file (in-list files)])
       (define-values (key file-name size) (apply values file))
       (define content (hash-ref memory key))
       (unless (= (bytes-length content) size)
@@ -162,4 +339,5 @@
       (call-with-output-file (build-path out-dir file-name) #:exists 'truncate
         (λ (port) (void (write-bytes content port)))))
     (printf "~a: ~a\n" name (describe (hash-ref memory 'registers)))
-    (printf "Wrote ~a to ~a\n" (map second output-files) out-dir)))
+    (when (hash-has-key? memory 'megacd) (printf "~a\n" (hash-ref memory 'megacd)))
+    (printf "Wrote ~a to ~a\n" (map second files) out-dir)))
