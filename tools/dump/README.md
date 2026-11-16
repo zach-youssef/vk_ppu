@@ -14,7 +14,8 @@ ROMs, disc images, BIOS files and savestates are never committed, and never uplo
 inputs, caches or artifacts): they stay in a folder of their own outside the repo. CI tests the
 tools on test ROMs written for them (`test/`) and on made-up files. What a game's scene commits
 is what the dump tools write from them: the frame's video memory, its registers and the
-emulator's screenshot.
+emulator's screenshot. Emulator cores are built or downloaded from their own projects, pinned
+(Mesen by its release's checksum, Genesis Plus GX by its commit), and only run, never copied in.
 
 Keep that folder in one subfolder per system, with BIOS files apart:
 

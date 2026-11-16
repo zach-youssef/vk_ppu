@@ -1,7 +1,8 @@
 # Builds each commit's games, native and for the web, and runs their screenshot tests: `make test`
 # natively on lavapipe with validation (including synchronization validation), and `make test-web`
 # under Node with Dawn (on lavapipe). It also runs the dump tools' tests: `make test-tools`, and the
-# Mesen dump check with Mesen 2's Linux release.
+# Mesen dump check with Mesen 2's Linux release, and the Genesis Plus GX frame check (a pinned
+# build of the libretro core, run headless).
 # Each commit's job runs with a read-only token: ci.yml's pending and statuses jobs post its "test"
 # commit status from the job's conclusion (the job is named "test <sha>").
 name: test
@@ -118,6 +119,32 @@ jobs:
         with:
           name: dump-check-${{ matrix.sha }}
           path: ${{ runner.temp }}/dump-check
+          if-no-files-found: ignore
+
+      # The Genesis Plus GX frame check (tools/dump/gpgx-frame/test/check.sh) builds the pinned
+      # core (about a minute) and needs no other build, so it also runs when the screenshot tests
+      # fail. Commits from before it existed skip it.
+      - name: Genesis Plus GX frame check
+        id: gpgx-check
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: |
+          if [ ! -f tools/dump/gpgx-frame/test/check.sh ]; then
+            echo "No tools/dump/gpgx-frame/test/check.sh in this commit: skipping the Genesis Plus GX frame check"
+            exit 0
+          fi
+          dpkg -s zlib1g-dev >/dev/null 2>&1 || { sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends zlib1g-dev; }
+          tools/dump/gpgx-frame/test/check.sh "$RUNNER_TEMP/gpgx-check"
+
+      # The test ROM, the frames, the states and their dumps, and the core's build log
+      - name: Upload the Genesis Plus GX check's work directory
+        if: ${{ failure() && steps.gpgx-check.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: gpgx-check-${{ matrix.sha }}
+          path: |
+            ${{ runner.temp }}/gpgx-check
+            build/gpgx-frame/core-build.log
           if-no-files-found: ignore
 
       # The captured frames, and the differences from the approved ones, for a failure's review

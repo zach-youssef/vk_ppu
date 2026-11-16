@@ -159,7 +159,9 @@ non-Mega-Drive mode, and that the command line writes the files or exits non-zer
   frames, from a minimal libretro frontend that loads the ROM, calls `retro_run` 30 times and
   writes `retro_serialize`.
 
-To remake the ROM: `racket tools/dump/test/genesis-test-rom.rkt test.bin`.
+To remake the ROM: `racket tools/dump/test/genesis-test-rom.rkt test.bin`. Its animated variant
+(`--animated`), for gpgx-frame's check, writes a new colour to CRAM entry 1 at the start of every
+frame and is otherwise the same, so the fixtures run on into it.
 
 No real Mega-CD state can be committed (each embeds BIOS-derived PRG-RAM), so the Mega-CD tests
 build synthetic ones: the Genesis Plus GX fixture's prefix up to the marker, then `"SCD!"` and a CD
@@ -167,3 +169,18 @@ part assembled field by field from GPGX's saved sizes for each known build (so t
 tool's offsets rather than restate them), with patterns in the registers, the render state, the
 CDC RAM and word RAM, in both word RAM modes. They check every output file, and that a 1.7.5
 state, an unknown marker offset, an ambiguous or garbled layout and a truncated state fail.
+
+`gpgx-frame/gpgx-frame.c` is a headless libretro frontend for the Genesis Plus GX core: it loads a
+game and a state, runs N frames, and writes the last frame as a PNG and the state after it.
+`gpgx-frame/build.sh` builds the core (libretro/Genesis-Plus-GX, fetched by the commit it pins) and
+the frontend into `build/gpgx-frame`; the core is GPL and non-commercial, so it's built from its
+own repository and called, never copied in. `gpgx-frame/test/check.sh [work-dir]` (CI runs it as
+its own step, after `make test-tools`; a few seconds after the core's build) builds them and checks
+them on the Genesis Plus GX fixture: frames 1 and 2 are native 320 x 224 pictures in the fixture's
+CRAM colours (`check.py` decodes the PNG itself), H32 (register 12 patched) gives 256 x 224, the
+states after them extract to the fixture's memory (the ROM only loops), and on the animated ROM
+each of frames 1 to 3 shows only its own state's CRAM and differs from the others, so a picture
+paired with the wrong frame's state fails; one frame from the state after frame 1 gives frame 2's
+picture and memory (comparing the state up to the sound context, whose host pointers change from
+run to run), RetroArch's container works, and the frontend refuses a bad frame count, a GST state
+and an OpenEmu-built Mega-CD state.

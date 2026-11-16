@@ -6,7 +6,7 @@
 ;; extracted byte must be. It's our own code, so the ROM and the savestate are freely
 ;; redistributable, but the ROM itself isn't committed: it's regenerated when needed.
 ;;
-;;   racket tools/dump/test/genesis-test-rom.rkt <out.md>
+;;   racket tools/dump/test/genesis-test-rom.rkt [--animated] <out.md>
 ;;
 ;; What the ROM does, from 0x200 (the reset vector):
 ;;   - TMSS: writes "SEGA" to 0xA14000 when the version register says the console has TMSS
@@ -17,6 +17,13 @@
 ;;   - VSRAM: 40 words from address 0, word i = (i * 0x0135) & 0x07FF
 ;;   - then `bra.s *`
 ;; The patterns aren't byte-symmetric, so a swapped byte order fails the test.
+;;
+;; The animated variant (--animated, for gpgx-frame's check) is the same ROM, byte for byte up to
+;; the register table, except that the idle loop branches to code after the table that changes
+;; CRAM every frame: at the start of each vertical blank it adds 2 to d4 and writes
+;; d4 & 0x0EEE to CRAM entry 1, then waits for the blank to end. Each frame's picture then shows
+;; the CRAM of its own frame only, so a frame paired with another frame's state is caught. The
+;; fixtures' PC is on the idle loop, so they run on into the animation with this ROM.
 
 (provide test-registers
          expected-vram expected-cram expected-vsram expected-registers
@@ -50,6 +57,7 @@
 (define idle-loop #x27A)        ; the `bra.s *`
 (define register-table #x27C)   ; 24 words, 0x8000 | reg << 8 | value
 (define rom-size #x2000)
+(define animation (+ register-table (* 2 24))) ; the animated variant's loop, after the table
 
 (define (long n) (list (arithmetic-shift n -16) (bitwise-and n #xFFFF)))
 
@@ -92,7 +100,22 @@
    (for/list ([value (in-list test-registers)] [reg (in-naturals)])
      (bitwise-ior #x8000 (arithmetic-shift reg 8) value)))) ; 27C register-table
 
-(define (build-test-rom)
+;; The animated variant's loop, from `animation`
+(define animation-code
+  (list #x3411                           ; 2AC move.w  (a1),d2        (VDP status)
+        #x0802 #x0003                    ; 2AE btst    #3,d2          (in vertical blank)
+        #x67F8                           ; 2B2 beq.s   $2AC
+        #x5444                           ; 2B4 addq.w  #2,d4
+        #x22BC #xC002 #x0000             ; 2B6 move.l  #$C0020000,(a1)  CRAM write, entry 1
+        #x3604                           ; 2BC move.w  d4,d3
+        #x0243 #x0EEE                    ; 2BE andi.w  #$0EEE,d3
+        #x3083                           ; 2C2 move.w  d3,(a0)
+        #x3411                           ; 2C4 move.w  (a1),d2
+        #x0802 #x0003                    ; 2C6 btst    #3,d2
+        #x66F8                           ; 2CA bne.s   $2C4           (until the blank ends)
+        #x60DE))                         ; 2CC bra.s   $2AC
+
+(define (build-test-rom #:animated? [animated? #f])
   (define rom (make-bytes rom-size 0))
   (define (put-word! address w)
     (bytes-set! rom address (arithmetic-shift w -8))
@@ -123,6 +146,10 @@
     (put-word! (+ code-start (* 2 i)) w))
   (unless (= (+ code-start (* 2 (length code))) (+ register-table (* 2 (length test-registers))))
     (error 'build-test-rom "the code doesn't end where the register table does"))
+  (when animated?
+    (put-word! idle-loop #x6030)         ; 27A bra.s   $2AC
+    (for ([w (in-list animation-code)] [i (in-naturals)])
+      (put-word! (+ animation (* 2 i)) w)))
   ;; The checksum (words from 0x200 to the end), which emulators don't check, for completeness
   (put-word! #x18E (for/fold ([sum 0]) ([a (in-range #x200 rom-size 2)])
                      (bitwise-and (+ sum (* 256 (bytes-ref rom a)) (bytes-ref rom (add1 a)))
@@ -133,5 +160,10 @@
 
 (module+ main
   (require racket/cmdline racket/file)
-  (define out (command-line #:args (out.md) out.md))
-  (call-with-output-file out #:exists 'truncate (λ (port) (void (write-bytes (build-test-rom) port)))))
+  (define animated? (make-parameter #f))
+  (define out
+    (command-line #:once-each [("--animated") "the variant that changes CRAM every frame"
+                                              (animated? #t)]
+                  #:args (out.md) out.md))
+  (call-with-output-file out #:exists 'truncate
+    (λ (port) (void (write-bytes (build-test-rom #:animated? (animated?)) port)))))
