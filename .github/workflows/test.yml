@@ -65,7 +65,7 @@ jobs:
       - uses: ./.ci/.github/actions/setup-zgal
         with:
           toolchain: native
-          npm-lockfile: external/vulkan_test/web/package-lock.json
+          npm-lockfile: external/zgal/web/package-lock.json
 
       - name: Build
         id: build

@@ -28,15 +28,15 @@ jobs:
         run: |
           git config --global url."https://github.com/".insteadOf git@github.com:
           git submodule update --init --recursive
-          git -C external/vulkan_test fetch --quiet origin HEAD
-          git -C external/vulkan_test checkout --quiet FETCH_HEAD
-          echo "Pinned: $(git rev-parse HEAD:external/vulkan_test)"
-          echo "Testing: $(git -C external/vulkan_test log -1 --format='%H %s')"
+          git -C external/zgal fetch --quiet origin HEAD
+          git -C external/zgal checkout --quiet FETCH_HEAD
+          echo "Pinned: $(git rev-parse HEAD:external/zgal)"
+          echo "Testing: $(git -C external/zgal log -1 --format='%H %s')"
 
-      - uses: ./external/vulkan_test/.github/actions/setup-zgal
+      - uses: ./external/zgal/.github/actions/setup-zgal
         with:
           toolchain: native
-          npm-lockfile: external/vulkan_test/web/package-lock.json
+          npm-lockfile: external/zgal/web/package-lock.json
 
       - name: Build
         id: build
